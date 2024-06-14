@@ -112,10 +112,12 @@ static int quiet_error(struct buffer_head *bh)
 
 static void buffer_io_error(struct buffer_head *bh)
 {
+#if 0
 	char b[BDEVNAME_SIZE];
 	printk(KERN_ERR "Buffer I/O error on device %s, logical block %Lu\n",
 			bdevname(bh->b_bdev, b),
 			(unsigned long long)bh->b_blocknr);
+#endif
 }
 
 /*

@@ -332,6 +332,10 @@ struct sock {
 	struct sk_filter __rcu	*sk_filter;
 	struct socket_wq __rcu	*sk_wq;
 
+#ifdef CONFIG_HUAWEI_BASTET
+	struct bastet_sock *bastet;
+#endif
+
 #ifdef CONFIG_NET_DMA
 	struct sk_buff_head	sk_async_wait_queue;
 #endif

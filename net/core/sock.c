@@ -139,6 +139,10 @@
 #include <net/tcp.h>
 #endif
 
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+#include <linux/android_aid.h>
+#endif
+
 static DEFINE_MUTEX(proto_list_mutex);
 static LIST_HEAD(proto_list);
 
@@ -567,7 +571,7 @@ static int sock_setbindtodevice(struct sock *sk, char __user *optval,
 
 	/* Sorry... */
 	ret = -EPERM;
-	if (!ns_capable(net->user_ns, CAP_NET_RAW))
+	if (!ns_capable(net->user_ns, CAP_NET_RAW) && !in_egroup_p(AID_INET))
 		goto out;
 
 	ret = -EINVAL;
@@ -1388,6 +1392,10 @@ EXPORT_SYMBOL(sk_alloc);
 static void __sk_free(struct sock *sk)
 {
 	struct sk_filter *filter;
+
+#ifdef CONFIG_HUAWEI_BASTET
+	bastet_sock_release(sk);
+#endif
 
 	if (sk->sk_destruct)
 		sk->sk_destruct(sk);

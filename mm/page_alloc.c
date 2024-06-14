@@ -60,6 +60,7 @@
 #include <linux/page-debug-flags.h>
 #include <linux/hugetlb.h>
 #include <linux/sched/rt.h>
+#include <linux/pasr.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -196,7 +197,20 @@ static char * const zone_names[MAX_NR_ZONES] = {
 	 "Movable",
 };
 
+/*
+ * Try to keep at least this much lowmem free.  Do not allow normal
+ * allocations below this point, only high priority ones. Automatically
+ * tuned according to the amount of memory in the system.
+ */
 int min_free_kbytes = 1024;
+int min_free_order_shift = 1;
+
+/*
+ * Extra memory for the system to try freeing. Used to temporarily
+ * free memory, to make space for new workloads. Anyone can allocate
+ * down to the min watermarks controlled by min_free_kbytes above.
+ */
+int extra_free_kbytes = 0;
 
 static unsigned long __meminitdata nr_kernel_pages;
 static unsigned long __meminitdata nr_all_pages;
@@ -571,6 +585,7 @@ static inline void __free_one_page(struct page *page,
 		} else {
 			list_del(&buddy->lru);
 			zone->free_area[order].nr_free--;
+			pasr_kget(buddy, order);
 			rmv_page_order(buddy);
 		}
 		combined_idx = buddy_idx & page_idx;
@@ -604,6 +619,7 @@ static inline void __free_one_page(struct page *page,
 	list_add(&page->lru, &zone->free_area[order].free_list[migratetype]);
 out:
 	zone->free_area[order].nr_free++;
+	pasr_kput(page, order);
 }
 
 static inline int free_pages_check(struct page *page)
@@ -836,6 +852,7 @@ static inline void expand(struct zone *zone, struct page *page,
 #endif
 		list_add(&page[size].lru, &area->free_list[migratetype]);
 		area->nr_free++;
+		pasr_kput(page, high);
 		set_page_order(&page[size], high);
 	}
 }
@@ -866,6 +883,13 @@ static int prep_new_page(struct page *page, int order, gfp_t gfp_flags)
 			return 1;
 	}
 
+#ifdef CONFIG_HISI_MNTN
+	if(gfp_flags & __GFP_HIGHMEM)
+	{
+		SetPageMemDump(page);
+	}
+#endif
+	
 	set_page_private(page, 0);
 	set_page_refcounted(page);
 
@@ -904,6 +928,7 @@ struct page *__rmqueue_smallest(struct zone *zone, unsigned int order,
 		list_del(&page->lru);
 		rmv_page_order(page);
 		area->nr_free--;
+		pasr_kget(page, current_order);
 		expand(zone, page, order, current_order, area, migratetype);
 		return page;
 	}
@@ -930,6 +955,12 @@ static int fallbacks[MIGRATE_TYPES][4] = {
 	[MIGRATE_ISOLATE]     = { MIGRATE_RESERVE }, /* Never used */
 #endif
 };
+
+int *get_migratetype_fallbacks(int mtype)
+{
+        return fallbacks[mtype];
+}
+
 
 /*
  * Move the free pages in a range to the free lists of the requested type.
@@ -1038,6 +1069,7 @@ __rmqueue_fallback(struct zone *zone, int order, int start_migratetype)
 			page = list_entry(area->free_list[migratetype].next,
 					struct page, lru);
 			area->nr_free--;
+			pasr_kget(page, current_order);
 
 			/*
 			 * If breaking a large block of pages, move all free
@@ -1425,6 +1457,7 @@ static int __isolate_free_page(struct page *page, unsigned int order)
 	/* Remove page from free list */
 	list_del(&page->lru);
 	zone->free_area[order].nr_free--;
+	pasr_kget(page, order);
 	rmv_page_order(page);
 
 	/* Set the pageblock if the isolated page is at least a pageblock */
@@ -1650,7 +1683,7 @@ static bool __zone_watermark_ok(struct zone *z, int order, unsigned long mark,
 		free_pages -= z->free_area[o].nr_free << o;
 
 		/* Require fewer higher order pages to be free */
-		min >>= 1;
+		min >>= min_free_order_shift;
 
 		if (free_pages <= min)
 			return false;
@@ -5330,6 +5363,7 @@ static void setup_per_zone_lowmem_reserve(void)
 static void __setup_per_zone_wmarks(void)
 {
 	unsigned long pages_min = min_free_kbytes >> (PAGE_SHIFT - 10);
+	unsigned long pages_low = extra_free_kbytes >> (PAGE_SHIFT - 10);
 	unsigned long lowmem_pages = 0;
 	struct zone *zone;
 	unsigned long flags;
@@ -5341,11 +5375,14 @@ static void __setup_per_zone_wmarks(void)
 	}
 
 	for_each_zone(zone) {
-		u64 tmp;
+		u64 min, low;
 
 		spin_lock_irqsave(&zone->lock, flags);
-		tmp = (u64)pages_min * zone->managed_pages;
-		do_div(tmp, lowmem_pages);
+		min = (u64)pages_min * zone->managed_pages;
+		do_div(min, lowmem_pages);
+		low = (u64)pages_low * zone->managed_pages;
+		do_div(low, vm_total_pages);
+
 		if (is_highmem(zone)) {
 			/*
 			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
@@ -5366,11 +5403,13 @@ static void __setup_per_zone_wmarks(void)
 			 * If it's a lowmem zone, reserve a number of pages
 			 * proportionate to the zone's size.
 			 */
-			zone->watermark[WMARK_MIN] = tmp;
+			zone->watermark[WMARK_MIN] = min;
 		}
 
-		zone->watermark[WMARK_LOW]  = min_wmark_pages(zone) + (tmp >> 2);
-		zone->watermark[WMARK_HIGH] = min_wmark_pages(zone) + (tmp >> 1);
+		zone->watermark[WMARK_LOW]  = min_wmark_pages(zone) +
+					low + (min >> 2);
+		zone->watermark[WMARK_HIGH] = min_wmark_pages(zone) +
+					low + (min >> 1);
 
 		setup_zone_migrate_reserve(zone);
 		spin_unlock_irqrestore(&zone->lock, flags);
@@ -5483,7 +5522,7 @@ module_init(init_per_zone_wmark_min)
 /*
  * min_free_kbytes_sysctl_handler - just a wrapper around proc_dointvec() so 
  *	that we can call two helper functions whenever min_free_kbytes
- *	changes.
+ *	or extra_free_kbytes changes.
  */
 int min_free_kbytes_sysctl_handler(ctl_table *table, int write, 
 	void __user *buffer, size_t *length, loff_t *ppos)
@@ -6186,6 +6225,9 @@ bool is_free_buddy_page(struct page *page)
 #endif
 
 static const struct trace_print_flags pageflag_names[] = {
+#ifdef CONFIG_HISI_MNTN
+	{1UL << PG_memdump,		"kerneldump"	}, /* added for kernel dump. */
+#endif
 	{1UL << PG_locked,		"locked"	},
 	{1UL << PG_error,		"error"		},
 	{1UL << PG_referenced,		"referenced"	},
@@ -6265,3 +6307,69 @@ void dump_page(struct page *page)
 	dump_page_flags(page->flags);
 	mem_cgroup_print_bad_page(page);
 }
+
+#ifdef CONFIG_ARM64
+unsigned long page_cache_over_limit(void)
+{
+	unsigned long lru_file, limit;
+
+	limit = vm_cache_limit_mbytes * ((1024 * 1024UL) / PAGE_SIZE);
+	lru_file = global_page_state(NR_ACTIVE_FILE)
+		+ global_page_state(NR_INACTIVE_FILE);
+	if (lru_file > limit)
+		return lru_file - limit;
+	return 0;
+}
+
+int cache_limit_ratio_sysctl_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *length, loff_t *ppos)
+{
+	int ret;
+
+	/* totalram_page may be changed after early boot */
+	vm_cache_limit_mbytes_max = totalram_pages >> (20 - PAGE_SHIFT);
+
+	ret = proc_doulongvec_minmax(table, write, buffer, length, ppos);
+	if (ret)
+		return ret;
+	if (write) {
+		vm_cache_limit_mbytes = totalram_pages
+			* vm_cache_limit_ratio / 100
+			* PAGE_SIZE / (1024 * 1024UL);
+		if (vm_cache_limit_ratio)
+			printk(KERN_WARNING "cache limit set to %lu%%\n",
+				vm_cache_limit_ratio);
+		else
+			printk(KERN_WARNING "cache limit off\n");
+		while (vm_cache_limit_mbytes && page_cache_over_limit())
+			shrink_page_cache(GFP_KERNEL);
+	}
+	return 0;
+}
+
+int cache_limit_mbytes_sysctl_handler(struct ctl_table *table, int write,
+		void __user *buffer, size_t *length, loff_t *ppos)
+{
+	int ret;
+
+	vm_cache_limit_mbytes_max = totalram_pages >> (20 - PAGE_SHIFT);
+
+	ret = proc_doulongvec_minmax(table, write, buffer, length, ppos);
+	if (ret)
+		return ret;
+	if (write) {
+		vm_cache_limit_ratio = (vm_cache_limit_mbytes
+			* ((1024 * 1024UL) / PAGE_SIZE)
+			+ totalram_pages / 200)
+			* 100 / totalram_pages;
+		if (vm_cache_limit_mbytes)
+			printk(KERN_WARNING "cache limit set to %luMB\n",
+				vm_cache_limit_mbytes);
+		else
+			printk(KERN_WARNING "cache limit off\n");
+		while (vm_cache_limit_mbytes && page_cache_over_limit())
+			shrink_page_cache(GFP_KERNEL);
+	}
+	return 0;
+}
+#endif

@@ -154,6 +154,7 @@ struct ip_reply_arg {
 				/* -1 if not needed */ 
 	int	    bound_dev_if;
 	u8  	    tos;
+	kuid_t	    uid;
 }; 
 
 #define IP_REPLY_ARG_NOSRCCHECK 1
@@ -226,6 +227,9 @@ extern void ipfrag_init(void);
 
 extern void ip_static_sysctl_init(void);
 
+#define IP4_REPLY_MARK(net, mark) \
+	((net)->ipv4.sysctl_fwmark_reflect ? (mark) : 0)
+
 static inline bool ip_is_fragment(const struct iphdr *iph)
 {
 	return (iph->frag_off & htons(IP_MF | IP_OFFSET)) != 0;
@@ -234,8 +238,7 @@ static inline bool ip_is_fragment(const struct iphdr *iph)
 #ifdef CONFIG_INET
 #include <net/dst.h>
 
-/* The function in 2.2 was invalid, producing wrong result for
- * check=0xFEFF. It was noticed by Arthur Skawina _year_ ago. --ANK(000625) */
+
 static inline
 int ip_decrease_ttl(struct iphdr *iph)
 {

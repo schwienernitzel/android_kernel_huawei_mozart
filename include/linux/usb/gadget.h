@@ -100,7 +100,6 @@ struct usb_request {
 	unsigned		no_interrupt:1;
 	unsigned		zero:1;
 	unsigned		short_not_ok:1;
-
 	void			(*complete)(struct usb_ep *ep,
 					struct usb_request *req);
 	void			*context;
@@ -108,6 +107,8 @@ struct usb_request {
 
 	int			status;
 	unsigned		actual;
+    /*add by hisi-balong*/
+    unsigned int    no_unmap_flag;
 };
 
 /*-------------------------------------------------------------------------*/

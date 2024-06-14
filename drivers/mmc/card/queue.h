@@ -47,9 +47,11 @@ struct mmc_queue {
 	struct mmc_card		*card;
 	struct task_struct	*thread;
 	struct semaphore	thread_sem;
-	unsigned int		flags;
+	volatile unsigned long	flags;
 #define MMC_QUEUE_SUSPENDED	(1 << 0)
 #define MMC_QUEUE_NEW_REQUEST	(1 << 1)
+#define MMC_QUEUE_SUSPENDED_BIT		(1 << 0)
+#define MMC_QUEUE_NEW_REQUEST_BIT	(1 << 1)
 
 	int			(*issue_fn)(struct mmc_queue *, struct request *);
 	void			*data;
@@ -57,6 +59,7 @@ struct mmc_queue {
 	struct mmc_queue_req	mqrq[2];
 	struct mmc_queue_req	*mqrq_cur;
 	struct mmc_queue_req	*mqrq_prev;
+	int tmp_get_card_flag;
 };
 
 extern int mmc_init_queue(struct mmc_queue *, struct mmc_card *, spinlock_t *,
@@ -72,7 +75,5 @@ extern void mmc_queue_bounce_post(struct mmc_queue_req *);
 
 extern int mmc_packed_init(struct mmc_queue *, struct mmc_card *);
 extern void mmc_packed_clean(struct mmc_queue *);
-
-extern int mmc_access_rpmb(struct mmc_queue *);
 
 #endif

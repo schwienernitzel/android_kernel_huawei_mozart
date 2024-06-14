@@ -2063,7 +2063,8 @@ extern int ext4_mb_add_groupinfo(struct super_block *sb,
 		ext4_group_t i, struct ext4_group_desc *desc);
 extern int ext4_group_add_blocks(handle_t *handle, struct super_block *sb,
 				ext4_fsblk_t block, unsigned long count);
-extern int ext4_trim_fs(struct super_block *, struct fstrim_range *);
+extern int ext4_trim_fs(struct super_block *, struct fstrim_range *,
+				unsigned long blkdev_flags);
 
 /* inode.c */
 struct buffer_head *ext4_getblk(handle_t *, struct inode *,
@@ -2151,7 +2152,12 @@ extern int search_dir(struct buffer_head *bh,
 		      struct inode *dir,
 		      const struct qstr *d_name,
 		      unsigned int offset,
+#ifdef CONFIG_SDCARD_FS_CI_SEARCH
+                      struct ext4_dir_entry_2 ** res_dir,
+                      char *ci_name_buf);
+#else
 		      struct ext4_dir_entry_2 **res_dir);
+#endif
 extern int ext4_generic_delete_entry(handle_t *handle,
 				     struct inode *dir,
 				     struct ext4_dir_entry_2 *de_del,
@@ -2539,7 +2545,12 @@ extern int htree_inlinedir_to_tree(struct file *dir_file,
 extern struct buffer_head *ext4_find_inline_entry(struct inode *dir,
 					const struct qstr *d_name,
 					struct ext4_dir_entry_2 **res_dir,
+#ifdef CONFIG_SDCARD_FS_CI_SEARCH
+                                        int *has_inline_data,
+                                        char* ci_name_buf);
+#else
 					int *has_inline_data);
+#endif
 extern int ext4_delete_inline_entry(handle_t *handle,
 				    struct inode *dir,
 				    struct ext4_dir_entry_2 *de_del,

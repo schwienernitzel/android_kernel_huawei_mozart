@@ -1,20 +1,4 @@
-/*
- * Copyright (C) 2007 Oracle.  All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public
- * License v2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public
- * License along with this program; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 021110-1307, USA.
- */
+
 
 #include <linux/delay.h>
 #include <linux/kthread.h>
@@ -283,7 +267,7 @@ void btrfs_unpin_free_ino(struct btrfs_root *root)
 		__btrfs_add_free_space(ctl, info->offset, count);
 free:
 		rb_erase(&info->offset_index, rbroot);
-		kmem_cache_free(btrfs_free_space_cachep, info);
+		kfree(info);
 	}
 }
 

@@ -38,6 +38,18 @@
 #include "blk.h"
 #include "blk-cgroup.h"
 
+#ifdef CONFIG_HISI_BLOCK_FREQUENCE_CONTROL
+#include "hisi_freq_ctl.h"
+#endif
+
+#ifdef CONFIG_HW_SYSTEM_WR_PROTECT
+#ifdef CONFIG_HW_FEATURE_STORAGE_DIAGNOSE_LOG
+#include <linux/store_log.h>
+#endif
+#ifdef CONFIG_HUAWEI_EMMC_DSM
+#include <linux/mmc/dsm_emmc.h>
+#endif
+#endif
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_rq_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_complete);
@@ -59,6 +71,14 @@ struct kmem_cache *blk_requestq_cachep;
  * Controlling structure to kblockd
  */
 static struct workqueue_struct *kblockd_workqueue;
+#ifdef CONFIG_HW_SYSTEM_WR_PROTECT
+/*  system write protect flag, 0: disable(default) 1:enable */
+static int ro_secure_debuggable_static = 0;
+static volatile int *ro_secure_debuggable = &ro_secure_debuggable_static;
+/*  system partition number is platform dependent, MUST change it according to platform */
+#define PART_SYSTEM "system"
+#define PART_SYSTEM_LEN 6
+#endif
 
 static void drive_stat_acct(struct request *rq, int new_io)
 {
@@ -1235,6 +1255,12 @@ static void part_round_stats_single(int cpu, struct hd_struct *part,
 		__part_stat_add(cpu, part, time_in_queue,
 				part_in_flight(part) * (now - part->stamp));
 		__part_stat_add(cpu, part, io_ticks, (now - part->stamp));
+#ifdef CONFIG_HISI_BLOCK_FREQUENCE_CONTROL
+		ddr_freq_request(DDR_FREQ_REQ_ADD,
+				part_in_flight(part) * (now - part->stamp));
+	} else {
+		ddr_freq_request(DDR_FREQ_REQ_REMOVE, (now - part->stamp));
+#endif
 	}
 	part->stamp = now;
 }
@@ -1846,6 +1872,27 @@ void generic_make_request(struct bio *bio)
 }
 EXPORT_SYMBOL(generic_make_request);
 
+#ifdef CONFIG_HW_SYSTEM_WR_PROTECT
+int blk_set_ro_secure_debuggable(int state)
+{
+	if(NULL != ro_secure_debuggable)
+	{
+		*ro_secure_debuggable = state;
+	}
+	return 0;
+}
+EXPORT_SYMBOL(blk_set_ro_secure_debuggable);
+
+static char *get_bio_part_name(struct bio *bio)
+{
+	if (unlikely(!bio || !bio->bi_bdev ||
+			!bio->bi_bdev->bd_part ||
+			!bio->bi_bdev->bd_part->info ||
+			!bio->bi_bdev->bd_part->info->volname[0]))
+		return NULL;
+	return bio->bi_bdev->bd_part->info->volname;
+}
+#endif
 /**
  * submit_bio - submit a bio to the block device layer for I/O
  * @rw: whether to %READ or %WRITE, or maybe to %READA (read ahead)
@@ -1858,6 +1905,9 @@ EXPORT_SYMBOL(generic_make_request);
  */
 void submit_bio(int rw, struct bio *bio)
 {
+#ifdef CONFIG_HW_SYSTEM_WR_PROTECT
+	char *name;
+#endif
 	bio->bi_rw |= rw;
 
 	/*
@@ -1878,6 +1928,45 @@ void submit_bio(int rw, struct bio *bio)
 			task_io_account_read(bio->bi_size);
 			count_vm_events(PGPGIN, count);
 		}
+#ifdef CONFIG_HW_SYSTEM_WR_PROTECT
+		if (rw & WRITE) {
+			name = get_bio_part_name(bio);
+
+			/*
+			 * runmode=factory:send write request to mmc driver.
+			 * bootmode=recovery:send write request to mmc driver.
+			 * partition is mounted ro: file system will block write request.
+			 * root user: send write request to mmc driver.
+			 */
+			if (unlikely(name && (strncmp(name, PART_SYSTEM, PART_SYSTEM_LEN) == 0) && (name[PART_SYSTEM_LEN] == '\0')) &&
+					((NULL != ro_secure_debuggable) ? (*ro_secure_debuggable):1)) {
+
+				pr_info("[HW]: eMMC protect driver built on %s @ %s, into printk\n", __DATE__, __TIME__);
+#ifdef CONFIG_HUAWEI_EMMC_DSM
+       DSM_EMMC_LOG(NULL, DSM_SYSTEM_W_ERR, "[HW]:EXT4_ERR_CAPS:%s(%d)[Parent: %s(%d)]: %s block %Lu on %s (%u sectors) %d %s.\n",
+						current->comm, task_pid_nr(current), current->parent->comm,task_pid_nr(current->parent),
+						(rw & WRITE) ? "WRITE" : "READ",
+						(unsigned long long)bio->bi_sector,
+						name,
+						count,
+						((NULL != ro_secure_debuggable) ? (*ro_secure_debuggable):1),
+						(strstr(saved_command_line,"fblock=locked") != NULL) ? "locked" : "unlock");
+
+#endif
+				printk(KERN_DEBUG "[HW]:EXT4_ERR_CAPS:%s(%d)[Parent: %s(%d)]: %s block %Lu on %s (%u sectors) %d %s.\n",
+						current->comm, task_pid_nr(current), current->parent->comm,task_pid_nr(current->parent),
+						(rw & WRITE) ? "WRITE" : "READ",
+						(unsigned long long)bio->bi_sector,
+						name,
+						count,
+						((NULL != ro_secure_debuggable) ? (*ro_secure_debuggable):1),
+						(strstr(saved_command_line,"fblock=locked") != NULL) ? "locked" : "unlock");
+
+				bio_endio(bio, -EIO);
+				return;
+			}
+		}
+#endif
 
 		if (unlikely(block_dump)) {
 			char b[BDEVNAME_SIZE];
@@ -2331,10 +2420,12 @@ bool blk_update_request(struct request *req, int error, unsigned int nr_bytes)
 			error_type = "I/O";
 			break;
 		}
+#if 0
 		printk_ratelimited(KERN_ERR "end_request: %s error, dev %s, sector %llu\n",
 				   error_type, req->rq_disk ?
 				   req->rq_disk->disk_name : "?",
 				   (unsigned long long)blk_rq_pos(req));
+#endif
 
 	}
 
@@ -3191,7 +3282,8 @@ int __init blk_dev_init(void)
 
 	/* used for unplugging and affects IO latency/throughput - HIGHPRI */
 	kblockd_workqueue = alloc_workqueue("kblockd",
-					    WQ_MEM_RECLAIM | WQ_HIGHPRI, 0);
+					    WQ_MEM_RECLAIM | WQ_HIGHPRI |
+					    WQ_POWER_EFFICIENT, 0);
 	if (!kblockd_workqueue)
 		panic("Failed to create kblockd\n");
 
@@ -3201,5 +3293,22 @@ int __init blk_dev_init(void)
 	blk_requestq_cachep = kmem_cache_create("blkdev_queue",
 			sizeof(struct request_queue), 0, SLAB_PANIC, NULL);
 
+#ifdef CONFIG_HISI_BLOCK_FREQUENCE_CONTROL
+	ddr_freq_ctrl_init();
+#endif
+
 	return 0;
 }
+
+#ifdef CONFIG_HW_SYSTEM_WR_PROTECT
+#define PADDING_MAX (10)
+int __init ro_secure_debuggable_init(void)
+{
+	ro_secure_debuggable = kzalloc(sizeof(int), GFP_KERNEL);
+	if (!ro_secure_debuggable)
+		ro_secure_debuggable = &ro_secure_debuggable_static;
+
+	return 0;
+}
+late_initcall(ro_secure_debuggable_init);
+#endif

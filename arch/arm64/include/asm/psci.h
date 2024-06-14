@@ -14,9 +14,6 @@
 #ifndef __ASM_PSCI_H
 #define __ASM_PSCI_H
 
-#define PSCI_POWER_STATE_TYPE_STANDBY		0
-#define PSCI_POWER_STATE_TYPE_POWER_DOWN	1
-
 struct psci_power_state {
 	u16	id;
 	u8	type;
@@ -29,10 +26,16 @@ struct psci_operations {
 	int (*cpu_off)(struct psci_power_state state);
 	int (*cpu_on)(unsigned long cpuid, unsigned long entry_point);
 	int (*migrate)(unsigned long cpuid);
+	int (*system_off)(void);
+	int (*system_reset)(unsigned int cmd_id);
 };
 
 extern struct psci_operations psci_ops;
 
-int psci_init(void);
+struct cpuidle_driver;
+void psci_init(void);
+
+int __init psci_dt_register_idle_states(struct cpuidle_driver *,
+					struct device_node *[]);
 
 #endif /* __ASM_PSCI_H */

@@ -29,6 +29,46 @@
 #include <linux/seq_file.h>
 #include <linux/ratelimit.h>
 
+#include <linux/huawei/rdr_private.h>
+#ifdef CONFIG_HISI_RDR
+#ifdef CONFIG_HISI_RDR_SWITCH
+static unsigned int curr_int_num = 0xffffffff;
+static unsigned int int_switch_flag;
+#endif
+
+static rdr_funcptr_3 int_switch_hook;
+
+void int_switch_hook_add(rdr_funcptr_3 p_hook_func)
+{
+	int_switch_hook = p_hook_func;
+}
+EXPORT_SYMBOL(int_switch_hook_add);
+
+void int_switch_hook_delete(void)
+{
+	int_switch_hook = NULL;
+}
+EXPORT_SYMBOL(int_switch_hook_delete);
+#else
+
+
+static unsigned int curr_int_num = 0xffffffff;
+static rdr_funcptr_3 int_switch_hook;
+static unsigned int int_switch_flag;
+
+void int_switch_hook_add(rdr_funcptr_3 p_hook_func)
+{
+	int_switch_hook = p_hook_func;
+}
+EXPORT_SYMBOL(int_switch_hook_add);
+
+void int_switch_hook_delete(void)
+{
+	int_switch_hook = NULL;
+}
+EXPORT_SYMBOL(int_switch_hook_delete);
+#endif
+
 unsigned long irq_err_count;
 
 int arch_show_interrupts(struct seq_file *p, int prec)
@@ -50,6 +90,29 @@ void handle_IRQ(unsigned int irq, struct pt_regs *regs)
 {
 	struct pt_regs *old_regs = set_irq_regs(regs);
 
+#ifdef CONFIG_HISI_RDR
+#ifdef CONFIG_HISI_RDR_SWITCH
+	unsigned int old_int_num = curr_int_num;
+
+	curr_int_num = irq;
+
+	if (NULL != int_switch_hook) {/*exc int hook func*/
+		int_switch_hook(0, old_int_num, curr_int_num);
+		int_switch_flag = 1;
+	}
+#endif
+#else
+	unsigned int old_int_num = curr_int_num;
+
+	curr_int_num = irq;
+
+	if (NULL != int_switch_hook) {/*exc int hook func*/
+		int_switch_hook(0, old_int_num, curr_int_num);
+		int_switch_flag = 1;
+	}
+#endif
+
+
 	irq_enter();
 
 	/*
@@ -64,6 +127,19 @@ void handle_IRQ(unsigned int irq, struct pt_regs *regs)
 	}
 
 	irq_exit();
+
+#ifdef CONFIG_HISI_RDR
+#ifdef CONFIG_HISI_RDR_SWITCH
+	/*call exception interrupt hook func*/
+	if ((NULL != int_switch_hook) && (0 != int_switch_flag))
+		int_switch_hook(1, old_int_num, curr_int_num);
+#endif
+#else
+	/*call exception interrupt hook func*/
+	if ((NULL != int_switch_hook) && (0 != int_switch_flag))
+		int_switch_hook(1, old_int_num, curr_int_num);
+#endif
+
 	set_irq_regs(old_regs);
 }
 
@@ -81,3 +157,64 @@ void __init init_IRQ(void)
 	if (!handle_arch_irq)
 		panic("No interrupt controller found.");
 }
+
+#ifdef CONFIG_HOTPLUG_CPU
+static bool migrate_one_irq(struct irq_desc *desc)
+{
+	struct irq_data *d = irq_desc_get_irq_data(desc);
+	const struct cpumask *affinity = d->affinity;
+	struct irq_chip *c;
+	bool ret = false;
+
+	/*
+	 * If this is a per-CPU interrupt, or the affinity does not
+	 * include this CPU, then we have nothing to do.
+	 */
+	if (irqd_is_per_cpu(d) || !cpumask_test_cpu(smp_processor_id(), affinity))
+		return false;
+
+	if (cpumask_any_and(affinity, cpu_online_mask) >= nr_cpu_ids) {
+		affinity = cpu_online_mask;
+		ret = true;
+	}
+
+	c = irq_data_get_irq_chip(d);
+	if (!c->irq_set_affinity)
+		pr_debug("IRQ%u: unable to set affinity\n", d->irq);
+	else if (c->irq_set_affinity(d, affinity, false) == IRQ_SET_MASK_OK && ret)
+		cpumask_copy(d->affinity, affinity);
+
+	return ret;
+}
+
+/*
+ * The current CPU has been marked offline.  Migrate IRQs off this CPU.
+ * If the affinity settings do not allow other CPUs, force them onto any
+ * available CPU.
+ *
+ * Note: we must iterate over all IRQs, whether they have an attached
+ * action structure or not, as we need to get chained interrupts too.
+ */
+void migrate_irqs(void)
+{
+	unsigned int i;
+	struct irq_desc *desc;
+	unsigned long flags;
+
+	local_irq_save(flags);
+
+	for_each_irq_desc(i, desc) {
+		bool affinity_broken;
+
+		raw_spin_lock(&desc->lock);
+		affinity_broken = migrate_one_irq(desc);
+		raw_spin_unlock(&desc->lock);
+
+		if (affinity_broken)
+			pr_warn_ratelimited("IRQ%u no longer affine to CPU%u\n",
+					    i, smp_processor_id());
+	}
+
+	local_irq_restore(flags);
+}
+#endif /* CONFIG_HOTPLUG_CPU */

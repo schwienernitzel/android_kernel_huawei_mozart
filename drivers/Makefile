@@ -7,6 +7,7 @@
 
 obj-y				+= irqchip/
 obj-y				+= bus/
+obj-y     += hwusb/
 
 # GPIO must come after pinctrl as gpios may need to mux pins etc
 obj-y				+= pinctrl/
@@ -17,6 +18,8 @@ obj-$(CONFIG_PARISC)		+= parisc/
 obj-$(CONFIG_RAPIDIO)		+= rapidio/
 obj-y				+= video/
 obj-y				+= idle/
+#obj-$(CONFIG_TZDRIVER)          += tzdriver/
+obj-$(CONFIG_ATFDRIVER)         += atfdriver/
 
 # IPMI must come before ACPI in order to provide IPMI opregion support
 obj-$(CONFIG_IPMI_HANDLER)	+= char/ipmi/
@@ -56,6 +59,7 @@ obj-$(CONFIG_FB_INTEL)          += video/intelfb/
 
 obj-$(CONFIG_PARPORT)		+= parport/
 obj-y				+= base/ block/ misc/ mfd/ nfc/
+obj-y				+= misc_via/
 obj-$(CONFIG_NUBUS)		+= nubus/
 obj-y				+= macintosh/
 obj-$(CONFIG_IDE)		+= ide/
@@ -95,12 +99,14 @@ obj-y				+= i2c/ media/
 obj-$(CONFIG_PPS)		+= pps/
 obj-$(CONFIG_PTP_1588_CLOCK)	+= ptp/
 obj-$(CONFIG_W1)		+= w1/
-obj-$(CONFIG_POWER_SUPPLY)	+= power/
-obj-$(CONFIG_HWMON)		+= hwmon/
-obj-$(CONFIG_THERMAL)		+= thermal/
+#obj-$(CONFIG_POWER_SUPPLY)	+= power/
+obj-y		+= hwmon/
+ifndef CONFIG_HI6XXX_THERMAL
+obj-$(CONFIG_THERMAL)           += thermal/
+endif
 obj-$(CONFIG_WATCHDOG)		+= watchdog/
 obj-$(CONFIG_MD)		+= md/
-obj-$(CONFIG_BT)		+= bluetooth/
+#obj-$(CONFIG_BT)		+= bluetooth/
 obj-$(CONFIG_ACCESSIBILITY)	+= accessibility/
 obj-$(CONFIG_ISDN)		+= isdn/
 obj-$(CONFIG_EDAC)		+= edac/
@@ -108,9 +114,11 @@ obj-$(CONFIG_EISA)		+= eisa/
 obj-y				+= lguest/
 obj-$(CONFIG_CPU_FREQ)		+= cpufreq/
 obj-$(CONFIG_CPU_IDLE)		+= cpuidle/
+#*just for compile*
 obj-y				+= mmc/
 obj-$(CONFIG_MEMSTICK)		+= memstick/
 obj-y				+= leds/
+obj-$(CONFIG_SWITCH)		+= switch/
 obj-$(CONFIG_INFINIBAND)	+= infiniband/
 obj-$(CONFIG_SGI_SN)		+= sn/
 obj-y				+= firmware/
@@ -129,15 +137,18 @@ obj-$(CONFIG_SSB)		+= ssb/
 obj-$(CONFIG_BCMA)		+= bcma/
 obj-$(CONFIG_VHOST_RING)	+= vhost/
 obj-$(CONFIG_VLYNQ)		+= vlynq/
+obj-$(CONFIG_IOMMU_SUPPORT)	+= iommu/
 obj-$(CONFIG_STAGING)		+= staging/
 obj-y				+= platform/
+obj-$(CONFIG_VIDEO_HI6210_CODEC) += vcodec/chipmedia/
+obj-y                           += videocom/
 #common clk code
 obj-y				+= clk/
+#obj-y		                += pmu/
 
-obj-$(CONFIG_MAILBOX)		+= mailbox/
+
 obj-$(CONFIG_HWSPINLOCK)	+= hwspinlock/
 obj-$(CONFIG_NFC)		+= nfc/
-obj-$(CONFIG_IOMMU_SUPPORT)	+= iommu/
 obj-$(CONFIG_REMOTEPROC)	+= remoteproc/
 obj-$(CONFIG_RPMSG)		+= rpmsg/
 
@@ -152,3 +163,33 @@ obj-$(CONFIG_IIO)		+= iio/
 obj-$(CONFIG_VME_BUS)		+= vme/
 obj-$(CONFIG_IPACK_BUS)		+= ipack/
 obj-$(CONFIG_NTB)		+= ntb/
+obj-$(CONFIG_CORESIGHT)		+= coresight/
+obj-$(CONFIG_ANDROID)		+= android/
+# obj-$(CONFIG_HISI_CS)           += coresight/
+obj-$(CONFIG_IMAGINATION_VCODEC)  += vcodec/imagination/
+obj-$(CONFIG_HIK3_VPP)          += vcodec/vpp/
+obj-$(CONFIG_CNM_JPU)      += vcodec/jpu/v8_jpu/
+obj-$(CONFIG_JPEG_CODEC)        += vcodec/jpu/v3_jpu/
+# hisi drivers
+#obj-$(CONFIG_HISILICON_PLATFORM) += hisi/
+obj-y += hisi/
+#IPC/MAILBOX
+obj-$(CONFIG_HUAWEI_HW_DEV_DCT)  += devdetect/
+
+obj-$(CONFIG_GATOR)		  += gator/
+obj-$(CONFIG_OF)		  += hsad/
+
+ifeq ($(CONFIG_UTTEST), y) 
+LINUXINCLUDE := -I$(BALONG_TOPDIR)/build/tools/ut_tool/linux_stub/arch/$(SRCARCH)/include $(LINUXINCLUDE)
+endif 
+obj-$(CONFIG_SENSORS_CLASS)		+= sensors/
+obj-$(CONFIG_TZDRIVER)          += tzdriver/
+obj-$(CONFIG_POWER_SUPPLY)     += power/
+obj-$(CONFIG_BT)               += bluetooth/
+obj-$(CONFIG_SRECORDER)     += srecorder/
+ifneq ($(strip $(HISI_PILOT_LIBS)), true)
+obj-y     += huawei_platform/
+obj-y     += huawei_platform_legacy/
+else
+obj-y     += hisi_pilot/
+endif

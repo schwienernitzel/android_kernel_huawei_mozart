@@ -26,9 +26,11 @@
 #include <linux/tty_flip.h>
 #include <linux/slab.h>
 #include <linux/export.h>
+
 #include <linux/module.h>
 
 #include "u_serial.h"
+/*#include "drv_usb_shell.h" */ /* added by hisi-balong */
 
 
 /*
@@ -81,7 +83,9 @@
  * consider it a NOP.  A third layer is provided by the TTY code.
  */
 #define QUEUE_SIZE		16
+#define ONCE_WRITE_BUF_SIZE		8192		/* once max TX*/
 #define WRITE_BUF_SIZE		8192		/* TX only */
+
 
 /* circular buffer */
 struct gs_buf {
@@ -121,13 +125,14 @@ struct gs_port {
 	struct usb_cdc_line_coding port_line_coding;	/* 8-N-1 etc */
 };
 
+/* increase N_PORTS if you need more */
+int n_ports = 7;
 static struct portmaster {
 	struct mutex	lock;			/* protect open/close */
 	struct gs_port	*port;
 } ports[MAX_U_SERIAL_PORTS];
 
 #define GS_CLOSE_TIMEOUT		15		/* seconds */
-
 
 
 #ifdef VERBOSE_DEBUG
@@ -374,7 +379,7 @@ __acquires(&port->port_lock)
 			break;
 
 		req = list_entry(pool->next, struct usb_request, list);
-		len = gs_send_packet(port, req->buf, in->maxpacket);
+		len = gs_send_packet(port, req->buf, ONCE_WRITE_BUF_SIZE);
 		if (len == 0) {
 			wake_up_interruptible(&port->drain_wait);
 			break;
@@ -383,6 +388,7 @@ __acquires(&port->port_lock)
 
 		req->length = len;
 		list_del(&req->list);
+
 		req->zero = (gs_buf_data_avail(&port->port_write_buf) == 0);
 
 		pr_vdebug(PREFIX "%d: tx len=%d, 0x%02x 0x%02x 0x%02x ...\n",
@@ -401,11 +407,20 @@ __acquires(&port->port_lock)
 		spin_lock(&port->port_lock);
 
 		if (status) {
-			pr_debug("%s: %s %s err %d\n",
+			printk(KERN_INFO "[gs_start_tx_printk]%s: %s %s err %d\n",
 					__func__, "queue", in->name, status);
 			list_add(&req->list, pool);
 			break;
 		}
+
+#ifndef FINAL_RELEASE_MODE
+        if(1 == port->port_num)
+        {
+             printk(KERN_INFO "[gs_start_tx_printk]%d:len=%d,%c%c%c%c%c%c ...\n",
+                    port->port_num, req->length,*((u8 *)req->buf),*((u8 *)req->buf+1),
+                    *((u8 *)req->buf+2),*((u8 *)req->buf+3),*((u8 *)req->buf+4),*((u8 *)req->buf+5));
+        }
+#endif
 
 		port->write_started++;
 
@@ -456,13 +471,21 @@ __acquires(&port->port_lock)
 		spin_lock(&port->port_lock);
 
 		if (status) {
-			pr_debug("%s: %s %s err %d\n",
+			printk(KERN_INFO "[gs_start_rx]%s: %s %s err %d\n",
 					__func__, "queue", out->name, status);
 			list_add(&req->list, pool);
 			break;
 		}
 		port->read_started++;
-
+#ifndef FINAL_RELEASE_MODE
+        if(1 == port->port_num)
+        {
+             printk(KERN_INFO "[gs_start_rx]%d:len=%d,%c%c%c%c%c%c%c%c ...\n",
+                    port->port_num, req->length, *((u8 *)req->buf),*((u8 *)req->buf+1)
+                    ,*((u8 *)req->buf+2),*((u8 *)req->buf+3),*((u8 *)req->buf+4)
+                    ,*((u8 *)req->buf+5),*((u8 *)req->buf+6),*((u8 *)req->buf+7));
+        }
+#endif
 		/* abort immediately after disconnect */
 		if (!port->port_usb)
 			break;
@@ -641,13 +664,12 @@ static int gs_alloc_requests(struct usb_ep *ep, struct list_head *head,
 	int			i;
 	struct usb_request	*req;
 	int n = allocated ? QUEUE_SIZE - *allocated : QUEUE_SIZE;
-
 	/* Pre-allocate up to QUEUE_SIZE transfers, but if we can't
 	 * do quite that many this time, don't fail ... we just won't
 	 * be as speedy as we might otherwise be.
 	 */
 	for (i = 0; i < n; i++) {
-		req = gs_alloc_req(ep, ep->maxpacket, GFP_ATOMIC);
+		req = gs_alloc_req(ep, ONCE_WRITE_BUF_SIZE, GFP_ATOMIC);
 		if (!req)
 			return list_empty(head) ? -ENOMEM : 0;
 		req->complete = fn;
@@ -673,7 +695,7 @@ static int gs_start_io(struct gs_port *port)
 	struct usb_ep		*ep = port->port_usb->out;
 	int			status;
 	unsigned		started;
-
+       printk(KERN_INFO "Enter gs_start_io!\n");
 	/* Allocate RX and TX I/O buffers.  We can't easily do this much
 	 * earlier (with GFP_KERNEL) because the requests are coupled to
 	 * endpoints, as are the packet sizes we'll be using.  Different
@@ -683,12 +705,16 @@ static int gs_start_io(struct gs_port *port)
 	status = gs_alloc_requests(ep, head, gs_read_complete,
 		&port->read_allocated);
 	if (status)
+	{
+		printk(KERN_INFO "gs_start_io: status is: %d!\n", status);
 		return status;
+	}
 
 	status = gs_alloc_requests(port->port_usb->in, &port->write_pool,
 			gs_write_complete, &port->write_allocated);
 	if (status) {
 		gs_free_requests(ep, head, &port->read_allocated);
+		printk(KERN_INFO "gs_start_io: status is: %d!\n", status);
 		return status;
 	}
 
@@ -705,7 +731,7 @@ static int gs_start_io(struct gs_port *port)
 			&port->write_allocated);
 		status = -EIO;
 	}
-
+       printk(KERN_INFO "Exit gs_start_io!\n");
 	return status;
 }
 
@@ -723,7 +749,7 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 	int		port_num = tty->index;
 	struct gs_port	*port;
 	int		status;
-
+       printk(KERN_INFO "Enter gs_open!\n");
 	do {
 		mutex_lock(&ports[port_num].lock);
 		port = ports[port_num].port;
@@ -752,8 +778,11 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 
 		switch (status) {
 		default:
+		{
+			printk(KERN_INFO "return default fix!\n");
 			/* fully handled */
 			return status;
+		}
 		case -EAGAIN:
 			/* must do the work */
 			break;
@@ -778,8 +807,10 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 		spin_lock_irq(&port->port_lock);
 
 		if (status) {
-			pr_debug("gs_open: ttyGS%d (%p,%p) no buffer\n",
+			printk(KERN_INFO "gs_open: ttyGS%d (%p,%p) no buffer\n",
 				port->port_num, tty, file);
+			//pr_debug("gs_open: ttyGS%d (%p,%p) no buffer\n",
+			//	port->port_num, tty, file);
 			port->openclose = false;
 			goto exit_unlock_port;
 		}
@@ -800,15 +831,16 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 	/* if connected, start the I/O stream */
 	if (port->port_usb) {
 		struct gserial	*gser = port->port_usb;
-
-		pr_debug("gs_open: start ttyGS%d\n", port->port_num);
+		printk(KERN_INFO "gs_open: start ttyGS%d\n", port->port_num);
+		//pr_debug("gs_open: start ttyGS%d\n", port->port_num);
 		gs_start_io(port);
 
 		if (gser->connect)
 			gser->connect(gser);
 	}
 
-	pr_debug("gs_open: ttyGS%d (%p,%p)\n", port->port_num, tty, file);
+	printk(KERN_INFO "gs_open: ttyGS%d (%p,%p)\n", port->port_num, tty, file);
+	//pr_debug("gs_open: ttyGS%d (%p,%p)\n", port->port_num, tty, file);
 
 	status = 0;
 
@@ -1126,6 +1158,7 @@ int gserial_alloc_line(unsigned char *line_num)
 
 	tty_dev = tty_port_register_device(&ports[port_num].port->port,
 			gs_tty_driver, port_num, NULL);
+
 	if (IS_ERR(tty_dev)) {
 		struct gs_port	*port;
 		pr_err("%s: failed to register tty for port %d, err %ld\n",
@@ -1169,29 +1202,37 @@ int gserial_connect(struct gserial *gser, u8 port_num)
 	struct gs_port	*port;
 	unsigned long	flags;
 	int		status;
-
+       printk(KERN_INFO "Enter gserial_connect!\n");
 	if (port_num >= MAX_U_SERIAL_PORTS)
 		return -ENXIO;
 
 	port = ports[port_num].port;
 	if (!port) {
-		pr_err("serial line %d not allocated.\n", port_num);
+		printk(KERN_INFO "serial line %d not allocated.\n", port_num);
+		//pr_err("serial line %d not allocated.\n", port_num);
 		return -EINVAL;
 	}
 	if (port->port_usb) {
-		pr_err("serial line %d is in use.\n", port_num);
+	    printk(KERN_INFO "serial line %d is in use.\n", port_num);
+		//pr_err("serial line %d is in use.\n", port_num);
 		return -EBUSY;
 	}
 
 	/* activate the endpoints */
 	status = usb_ep_enable(gser->in);
 	if (status < 0)
+	{
+	       printk(KERN_INFO "gserial_connect status is %d\n", status);
 		return status;
+	}
 	gser->in->driver_data = port;
 
 	status = usb_ep_enable(gser->out);
 	if (status < 0)
+	{
+	       printk(KERN_INFO "status is %d\n", status);
 		goto fail_out;
+	}
 	gser->out->driver_data = port;
 
 	/* then tell the tty glue that I/O can work */
@@ -1210,7 +1251,8 @@ int gserial_connect(struct gserial *gser, u8 port_num)
 	 * protocol about open/close status (connect/disconnect).
 	 */
 	if (port->port.count) {
-		pr_debug("gserial_connect: start ttyGS%d\n", port->port_num);
+	    printk(KERN_INFO "gserial_connect: start ttyGS%d\n", port->port_num);
+		//pr_debug("gserial_connect: start ttyGS%d\n", port->port_num);
 		gs_start_io(port);
 		if (gser->connect)
 			gser->connect(gser);
@@ -1220,7 +1262,7 @@ int gserial_connect(struct gserial *gser, u8 port_num)
 	}
 
 	spin_unlock_irqrestore(&port->port_lock, flags);
-
+       printk(KERN_INFO "Last status is %d\n", status);
 	return status;
 
 fail_out:
@@ -1266,9 +1308,11 @@ void gserial_disconnect(struct gserial *gser)
 	/* disable endpoints, aborting down any active I/O */
 	usb_ep_disable(gser->out);
 	gser->out->driver_data = NULL;
+	gser->out->desc = NULL;
 
 	usb_ep_disable(gser->in);
 	gser->in->driver_data = NULL;
+	gser->in->desc = NULL;
 
 	/* finally, free any unused/unusable I/O buffers */
 	spin_lock_irqsave(&port->port_lock, flags);
@@ -1289,6 +1333,8 @@ static int userial_init(void)
 {
 	unsigned			i;
 	int				status;
+
+    printk(KERN_INFO "%s +\n",__func__);
 
 	gs_tty_driver = alloc_tty_driver(MAX_U_SERIAL_PORTS);
 	if (!gs_tty_driver)
@@ -1328,6 +1374,8 @@ static int userial_init(void)
 			MAX_U_SERIAL_PORTS,
 			(MAX_U_SERIAL_PORTS == 1) ? "" : "s");
 
+    printk(KERN_INFO "%s -\n",__func__);
+
 	return status;
 fail:
 	put_tty_driver(gs_tty_driver);
@@ -1345,3 +1393,51 @@ static void userial_cleanup(void)
 module_exit(userial_cleanup);
 
 MODULE_LICENSE("GPL");
+
+/* added by hisi-balong */
+/**
+ * ashell_console_device() - callback for console device, to return driver
+ * of current console
+ * @cons: contex of current console
+ * @gidx: console index, negtive
+ * Return the console driver .
+ */
+struct tty_driver *ashell_console_device(struct console *cons, int *gidx)
+{
+    if (gidx){
+       *gidx = 0;
+    }
+
+    return gs_tty_driver;
+}
+
+/**
+ * usb_tty_driver_get() - get usb tty device's driver
+ * @void: param null
+ * Return usb tty device's driver .
+ */
+struct tty_driver *usb_tty_driver_get(void)
+{
+    return gs_tty_driver;
+}
+
+/**
+ * usb_tty_port_get() - get usb tty device's port
+ * @handle: tty context
+ * Return usb tty device's port .
+ */
+struct gserial *usb_tty_port_get(void *handle)
+{
+    struct tty_struct *tty = (struct tty_struct *)handle;
+    struct gs_port *port = NULL;
+
+    if (tty) {
+        port = (struct gs_port *)tty->driver_data;
+        if (port) {
+            return (port->port_usb);
+        }
+    }
+
+    return NULL;
+}
+/* added by hisi-balong */
