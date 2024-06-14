@@ -420,6 +420,8 @@ extern void spi_unregister_master(struct spi_master *master);
 
 extern struct spi_master *spi_busnum_to_master(u16 busnum);
 
+extern void dev_spi_dsm_client_notify(const char* content, int errNum, struct spi_device *spi);
+
 /*---------------------------------------------------------------------------*/
 
 /*
@@ -667,7 +669,7 @@ extern int spi_sync(struct spi_device *spi, struct spi_message *message);
 extern int spi_sync_locked(struct spi_device *spi, struct spi_message *message);
 extern int spi_bus_lock(struct spi_master *master);
 extern int spi_bus_unlock(struct spi_master *master);
-
+extern void spi0_clk_ctrl(bool on);
 /**
  * spi_write - SPI synchronous write
  * @spi: device to which data will be written

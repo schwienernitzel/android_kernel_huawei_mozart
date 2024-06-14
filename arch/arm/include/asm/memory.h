@@ -154,6 +154,7 @@
  * private definitions which should NOT be used outside memory.h
  * files.  Use virt_to_phys/phys_to_virt/__pa/__va instead.
  */
+extern phys_addr_t (*arch_virt_to_idmap) (unsigned long x);
 #ifndef __virt_to_phys
 #ifdef CONFIG_ARM_PATCH_PHYS_VIRT
 
@@ -230,6 +231,21 @@ static inline void *phys_to_virt(phys_addr_t x)
 #define __pa(x)			__virt_to_phys((unsigned long)(x))
 #define __va(x)			((void *)__phys_to_virt((unsigned long)(x)))
 #define pfn_to_kaddr(pfn)	__va((pfn) << PAGE_SHIFT)
+
+/*
+ * These are for systems that have a hardware interconnect supported alias of
+ * physical memory for idmap purposes.  Most cases should leave these
+ * untouched.
+ */
+static inline phys_addr_t __virt_to_idmap(unsigned long x)
+{
+	if (arch_virt_to_idmap)
+		return arch_virt_to_idmap(x);
+	else
+		return __virt_to_phys(x);
+}
+
+#define virt_to_idmap(x)	__virt_to_idmap((unsigned long)(x))
 
 /*
  * Virtual <-> DMA view memory address translations

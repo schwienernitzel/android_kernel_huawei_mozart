@@ -36,9 +36,10 @@
 #include <trace/events/regulator.h>
 
 #include "dummy.h"
-
-#define rdev_crit(rdev, fmt, ...)					\
-	pr_crit("%s: " fmt, rdev_get_name(rdev), ##__VA_ARGS__)
+/*lint -emacro(750,*)*/
+/* #define rdev_crit(rdev, fmt, ...)					\
+	pr_crit("%s: " fmt, rdev_get_name(rdev), ##__VA_ARGS__) */
+/*lint +emacro(750,*)*/
 #define rdev_err(rdev, fmt, ...)					\
 	pr_err("%s: " fmt, rdev_get_name(rdev), ##__VA_ARGS__)
 #define rdev_warn(rdev, fmt, ...)					\
@@ -102,6 +103,7 @@ struct regulator {
 };
 
 static int _regulator_is_enabled(struct regulator_dev *rdev);
+static int _regulator_enable(struct regulator_dev *rdev);
 static int _regulator_disable(struct regulator_dev *rdev);
 static int _regulator_get_voltage(struct regulator_dev *rdev);
 static int _regulator_get_current_limit(struct regulator_dev *rdev);
@@ -312,6 +314,7 @@ static ssize_t regulator_uV_show(struct device *dev,
 
 	return ret;
 }
+
 static DEVICE_ATTR(microvolts, 0444, regulator_uV_show, NULL);
 
 static ssize_t regulator_uA_show(struct device *dev,
@@ -377,7 +380,36 @@ static ssize_t regulator_state_show(struct device *dev,
 
 	return ret;
 }
-static DEVICE_ATTR(state, 0444, regulator_state_show, NULL);
+
+static ssize_t regulator_state_set(struct device *dev,
+				   struct device_attribute *attr, char *buf,size_t count)
+{
+	struct regulator_dev *rdev = dev_get_drvdata(dev);
+	ssize_t ret;
+	long val;
+
+	if (strict_strtol(buf, 10, &val) < 0)
+		return -EINVAL;
+
+	rdev_info(rdev, "regulator state is: %ld\n", val);
+
+	if(NULL != strstr(saved_command_line,"androidboot.swtype=factory")) {
+		if((1 == val) && (!_regulator_is_enabled(rdev))){
+			mutex_lock(&rdev->mutex);
+			_regulator_enable(rdev);
+			mutex_unlock(&rdev->mutex);
+		}
+		if((0 == val) && (_regulator_is_enabled(rdev))){
+			mutex_lock(&rdev->mutex);
+			_regulator_disable(rdev);
+			mutex_unlock(&rdev->mutex);
+		}
+		return count;
+	}
+
+	return -EINVAL;
+}
+static DEVICE_ATTR(state, 0444, regulator_state_show, regulator_state_set);
 
 static ssize_t regulator_status_show(struct device *dev,
 				   struct device_attribute *attr, char *buf)
@@ -769,7 +801,7 @@ static int suspend_prepare(struct regulator_dev *rdev, suspend_state_t state)
 static void print_constraints(struct regulator_dev *rdev)
 {
 	struct regulation_constraints *constraints = rdev->constraints;
-	char buf[160] = "";
+	char buf[80] = "";
 	int count = 0;
 	int ret;
 
@@ -1893,8 +1925,9 @@ int regulator_disable_deferred(struct regulator *regulator, int ms)
 	rdev->deferred_disables++;
 	mutex_unlock(&rdev->mutex);
 
-	ret = schedule_delayed_work(&rdev->disable_work,
-				    msecs_to_jiffies(ms));
+	ret = queue_delayed_work(system_power_efficient_wq,
+				 &rdev->disable_work,
+				 msecs_to_jiffies(ms));
 	if (ret < 0)
 		return ret;
 	else
@@ -1913,7 +1946,7 @@ EXPORT_SYMBOL_GPL(regulator_disable_deferred);
  */
 int regulator_is_enabled_regmap(struct regulator_dev *rdev)
 {
-	unsigned int val;
+	unsigned int val = 0;
 	int ret;
 
 	ret = regmap_read(rdev->regmap, rdev->desc->enable_reg, &val);
@@ -1938,7 +1971,7 @@ EXPORT_SYMBOL_GPL(regulator_is_enabled_regmap);
  */
 int regulator_enable_regmap(struct regulator_dev *rdev)
 {
-	unsigned int val;
+	unsigned int val = 0;
 
 	if (rdev->desc->enable_is_inverted)
 		val = 0;
@@ -2196,7 +2229,7 @@ EXPORT_SYMBOL_GPL(regulator_is_supported_voltage);
  */
 int regulator_get_voltage_sel_regmap(struct regulator_dev *rdev)
 {
-	unsigned int val;
+	unsigned int val = 0;
 	int ret;
 
 	ret = regmap_read(rdev->regmap, rdev->desc->vsel_reg, &val);
@@ -2502,7 +2535,7 @@ int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV)
 	ret = regulator_check_voltage(rdev, &min_uV, &max_uV);
 	if (ret < 0)
 		goto out;
-	
+
 	/* restore original values in case of error */
 	old_min_uV = regulator->min_uV;
 	old_max_uV = regulator->max_uV;
@@ -2516,7 +2549,7 @@ int regulator_set_voltage(struct regulator *regulator, int min_uV, int max_uV)
 	ret = _regulator_do_set_voltage(rdev, min_uV, max_uV);
 	if (ret < 0)
 		goto out2;
-	
+
 out:
 	mutex_unlock(&rdev->mutex);
 	return ret;
@@ -2841,7 +2874,7 @@ static unsigned int _regulator_get_mode(struct regulator_dev *rdev)
 	ret = rdev->desc->ops->get_mode(rdev);
 out:
 	mutex_unlock(&rdev->mutex);
-	return ret;
+	return ret;/*[false alarm]*/
 }
 
 /**
@@ -2966,7 +2999,7 @@ EXPORT_SYMBOL_GPL(regulator_set_optimum_mode);
  */
 int regulator_set_bypass_regmap(struct regulator_dev *rdev, bool enable)
 {
-	unsigned int val;
+	unsigned int val = 0;
 
 	if (enable)
 		val = rdev->desc->bypass_mask;
@@ -2986,7 +3019,7 @@ EXPORT_SYMBOL_GPL(regulator_set_bypass_regmap);
  */
 int regulator_get_bypass_regmap(struct regulator_dev *rdev, bool *enable)
 {
-	unsigned int val;
+	unsigned int val = 0;
 	int ret;
 
 	ret = regmap_read(rdev->regmap, rdev->desc->bypass_reg, &val);
@@ -4029,4 +4062,80 @@ unlock:
 
 	return 0;
 }
+
 late_initcall(regulator_init_complete);
+
+#ifdef CONFIG_DEBUG_FS
+void get_current_regulator_dev(struct seq_file *s)
+{
+	struct regulator_dev *rdev;
+	struct regulator_ops *ops;
+	int enabled = 0;
+	list_for_each_entry(rdev, &regulator_list, list) {
+		if (NULL == rdev->constraints->name)
+			break;
+		seq_printf(s, "%-15s", rdev->constraints->name);
+		ops = rdev->desc->ops;
+		if (ops->is_enabled)
+			enabled = ops->is_enabled(rdev);
+
+		if (enabled) {
+			seq_printf(s, "%-20s", "ON");
+		} else {
+			seq_printf(s, "%-20s", "OFF");
+		}
+		seq_printf(s, "%d\t\t", rdev->use_count);
+		seq_printf(s, "%d\t\t", rdev->open_count);
+		if (rdev->constraints->always_on) {
+			seq_printf(s, "%-17s\n\r", "ON");
+		} else {
+			seq_printf(s, "%-17s\n\r", "OFF");
+		}
+	}
+}
+
+void set_regulator_state(char *ldo_name, int value)
+{
+	struct regulator_dev *rdev;
+	struct regulator_ops *ops;
+	pr_info("ldo_name=%s,value=%d\n\r", ldo_name, value);
+	list_for_each_entry(rdev, &regulator_list, list) {
+		ops = rdev->desc->ops;
+
+		if (strcmp(rdev->constraints->name, "(null)") == 0) {
+			pr_info("Couldnot find your ldo name\n\r");
+			return;
+		}
+		if ((strcmp(rdev->constraints->name, ldo_name) == 0)) {
+			if (value == 0) {
+				pr_info("close the %s\n\r", ldo_name);
+				ops->disable(rdev);
+			} else {
+				pr_info("open the %s\n\r", ldo_name);
+				ops->enable(rdev);
+			}
+			return;
+		}
+	}
+}
+
+void get_regulator_state(char *ldo_name)
+{
+	struct regulator_dev *rdev;
+	struct regulator_ops *ops;
+	int voltage_value;
+	pr_info("ldo_name=%s\n\r", ldo_name);
+	list_for_each_entry(rdev, &regulator_list, list) {
+		ops = rdev->desc->ops;
+		if (strcmp(rdev->constraints->name, "(null)") == 0) {
+			pr_info("Couldnot find your ldo name\n\r");
+			return;
+		}
+		if ((strcmp(rdev->constraints->name, ldo_name) == 0)) {
+			voltage_value = ops->get_voltage(rdev);
+			pr_info("voltage_value the %d\n\r", voltage_value);
+			return;
+		}
+	}
+}
+#endif

@@ -170,9 +170,7 @@ enum rq_flag_bits {
 	__REQ_ELVPRIV,		/* elevator private data attached */
 	__REQ_FAILED,		/* set if the request failed */
 	__REQ_QUIET,		/* don't worry about errors */
-	__REQ_PREEMPT,		/* set for "ide_preempt" requests and also
-				   for requests for which the SCSI "quiesce"
-				   state must be ignored. */
+	__REQ_PREEMPT,		/* set for "ide_preempt" requests */
 	__REQ_ALLOCED,		/* request came from our alloc pool */
 	__REQ_COPY_USER,	/* contains copies of user pages */
 	__REQ_FLUSH_SEQ,	/* request for flush sequence */
@@ -232,4 +230,9 @@ enum rq_flag_bits {
 #define REQ_KERNEL		(1 << __REQ_KERNEL)
 #define REQ_PM			(1 << __REQ_PM)
 
+#if 1 //clb
+#define REQ_PACKED			REQ_PM
+#define REQ_PACKED_START	REQ_FAILFAST_DEV
+#define REQ_PACKED_END		REQ_FAILFAST_TRANSPORT
+#endif 
 #endif /* __LINUX_BLK_TYPES_H */

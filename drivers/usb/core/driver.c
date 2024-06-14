@@ -1378,6 +1378,19 @@ int usb_suspend(struct device *dev, pm_message_t msg)
 {
 	struct usb_device	*udev = to_usb_device(dev);
 
+
+#ifdef CONFIG_ARCH_HI6XXX
+#ifdef CONFIG_PM_RUNTIME
+
+    if (dev->power.runtime_auto) {
+        dev_vdbg(&udev->dev, "the device can autosupend and not need suspend by PM core\n");
+        dev_vdbg(&udev->dev, "the device is %s, and not need suspend port\n", udev->product);
+        return 0;
+    }
+#endif
+#endif
+
+
 	unbind_no_pm_drivers_interfaces(udev);
 
 	/* From now on we are sure all drivers support suspend/resume
@@ -1406,6 +1419,16 @@ int usb_resume(struct device *dev, pm_message_t msg)
 {
 	struct usb_device	*udev = to_usb_device(dev);
 	int			status;
+
+#ifdef CONFIG_ARCH_HI6XXX
+#ifdef CONFIG_PM_RUNTIME
+    if (dev->power.runtime_auto) {
+        dev_vdbg(&udev->dev, "the device can autoresume and not need resume by PM core\n");
+        dev_vdbg(&udev->dev, "the device is %s, and not need suspend port\n", udev->product);
+        return 0;
+    }
+#endif
+#endif	
 
 	/* For all calls, take the device back to full power and
 	 * tell the PM core in case it was autosuspended previously.
@@ -1754,13 +1777,10 @@ int usb_runtime_suspend(struct device *dev)
 	if (status == -EAGAIN || status == -EBUSY)
 		usb_mark_last_busy(udev);
 
-	/*
-	 * The PM core reacts badly unless the return code is 0,
-	 * -EAGAIN, or -EBUSY, so always return -EBUSY on an error
-	 * (except for root hubs, because they don't suspend through
-	 * an upstream port like other USB devices).
+	/* The PM core reacts badly unless the return code is 0,
+	 * -EAGAIN, or -EBUSY, so always return -EBUSY on an error.
 	 */
-	if (status != 0 && udev->parent)
+	if (status != 0)
 		return -EBUSY;
 	return status;
 }

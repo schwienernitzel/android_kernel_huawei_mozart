@@ -348,7 +348,13 @@ out_release:
 int __ref cpu_down(unsigned int cpu)
 {
 	int err;
-
+#ifdef CONFIG_ARCH_HI6XXX
+	if(cpu == 0)
+	{
+		err=-EBUSY;
+		goto out; 
+	}
+#endif
 	cpu_maps_update_begin();
 
 	if (cpu_hotplug_disabled) {
@@ -427,7 +433,13 @@ int __cpuinit cpu_up(unsigned int cpu)
 	int nid;
 	pg_data_t	*pgdat;
 #endif
-
+#ifdef CONFIG_ARCH_HI6XXX
+	if(cpu == 0)
+	{
+		err=-EBUSY;
+		goto out; 
+	}
+#endif
 	if (!cpu_possible(cpu)) {
 		printk(KERN_ERR "can't online cpu %d because it is not "
 			"configured as may-hotadd at boot time\n", cpu);
@@ -728,3 +740,23 @@ void init_cpu_online(const struct cpumask *src)
 {
 	cpumask_copy(to_cpumask(cpu_online_bits), src);
 }
+
+static ATOMIC_NOTIFIER_HEAD(idle_notifier);
+
+void idle_notifier_register(struct notifier_block *n)
+{
+	atomic_notifier_chain_register(&idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_register);
+
+void idle_notifier_unregister(struct notifier_block *n)
+{
+	atomic_notifier_chain_unregister(&idle_notifier, n);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_unregister);
+
+void idle_notifier_call_chain(unsigned long val)
+{
+	atomic_notifier_call_chain(&idle_notifier, val, NULL);
+}
+EXPORT_SYMBOL_GPL(idle_notifier_call_chain);

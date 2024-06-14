@@ -73,7 +73,9 @@
 #include <linux/init_task.h>
 #include <linux/binfmts.h>
 #include <linux/context_tracking.h>
-
+#ifdef CONFIG_HUAWEI_MSG_POLICY
+#include <huawei_platform/power/msgnotify.h>
+#endif
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
 #include <asm/irq_regs.h>
@@ -81,13 +83,16 @@
 #ifdef CONFIG_PARAVIRT
 #include <asm/paravirt.h>
 #endif
+#ifdef CONFIG_ILOCKDEP
+#include <linux/ilockdep.h>
+#endif
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/sched.h>
 
 #include "sched.h"
 #include "../workqueue_internal.h"
 #include "../smpboot.h"
-
-#define CREATE_TRACE_POINTS
-#include <trace/events/sched.h>
 
 void start_bandwidth_timer(struct hrtimer *period_timer, ktime_t period)
 {
@@ -1407,7 +1412,11 @@ void scheduler_ipi(void)
 {
 	if (llist_empty(&this_rq()->wake_list)
 			&& !tick_nohz_full_cpu(smp_processor_id())
-			&& !got_nohz_idle_kick())
+			&& !got_nohz_idle_kick()
+#ifdef CONFIG_SCHED_HMP
+			&& !this_rq()->wake_for_idle_pull
+#endif
+			)
 		return;
 
 	/*
@@ -1434,6 +1443,11 @@ void scheduler_ipi(void)
 		this_rq()->idle_balance = 1;
 		raise_softirq_irqoff(SCHED_SOFTIRQ);
 	}
+#ifdef CONFIG_SCHED_HMP
+	else if (unlikely(this_rq()->wake_for_idle_pull))
+		raise_softirq_irqoff(SCHED_SOFTIRQ);
+#endif
+
 	irq_exit();
 }
 
@@ -1481,7 +1495,7 @@ static void ttwu_queue(struct task_struct *p, int cpu)
  * Returns %true if @p was woken up, %false if it was already running
  * or @state didn't match @p's state.
  */
-static int
+int
 try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 {
 	unsigned long flags;
@@ -1537,6 +1551,7 @@ out:
 
 	return success;
 }
+EXPORT_SYMBOL(try_to_wake_up);
 
 /**
  * try_to_wake_up_local - try to wake up a local task with rq lock held
@@ -1597,6 +1612,9 @@ int wake_up_state(struct task_struct *p, unsigned int state)
 	return try_to_wake_up(p, state, 0);
 }
 
+#if defined(CONFIG_ARCH_HI3XXX)||defined(CONFIG_ARCH_HI6XXX)
+extern unsigned int task_fork_on_bigcluster;
+#endif
 /*
  * Perform scheduler related setup for a newly forked process p.
  * p is forked by current.
@@ -1623,6 +1641,40 @@ static void __sched_fork(struct task_struct *p)
 #if defined(CONFIG_SMP) && defined(CONFIG_FAIR_GROUP_SCHED)
 	p->se.avg.runnable_avg_period = 0;
 	p->se.avg.runnable_avg_sum = 0;
+#ifdef CONFIG_SCHED_HMP
+	/* keep LOAD_AVG_MAX in sync with fair.c if load avg series is changed */
+#define LOAD_AVG_MAX 47742	
+#define LOAD_AVG_MIN 0
+
+	p->se.avg.hmp_last_up_migration = 0;
+	p->se.avg.hmp_last_down_migration = 0;
+#if defined(CONFIG_ARCH_HI3XXX)||defined(CONFIG_ARCH_HI6XXX)
+	if(!task_fork_on_bigcluster){
+            p->se.avg.load_avg_ratio = 0;
+            p->se.avg.load_avg_contrib =
+                    (0 * scale_load_down(p->se.load.weight));
+            p->se.avg.runnable_avg_period = LOAD_AVG_MIN;
+            p->se.avg.runnable_avg_sum = LOAD_AVG_MIN;
+            p->se.avg.usage_avg_sum = LOAD_AVG_MIN;
+    }else if(hmp_task_should_forkboost(p)){
+		    p->se.avg.load_avg_ratio = 1023;
+		    p->se.avg.load_avg_contrib =
+				    (1023 * scale_load_down(p->se.load.weight));
+		    p->se.avg.runnable_avg_period = LOAD_AVG_MAX;
+		    p->se.avg.runnable_avg_sum = LOAD_AVG_MAX;
+		    p->se.avg.usage_avg_sum = LOAD_AVG_MAX;
+	}
+#else
+	if(hmp_task_should_forkboost(p)){
+	    p->se.avg.load_avg_ratio = 1023;
+	    p->se.avg.load_avg_contrib =
+			    (1023 * scale_load_down(p->se.load.weight));
+	    p->se.avg.runnable_avg_period = LOAD_AVG_MAX;
+	    p->se.avg.runnable_avg_sum = LOAD_AVG_MAX;
+	    p->se.avg.usage_avg_sum = LOAD_AVG_MAX;
+	}
+#endif    
+#endif
 #endif
 #ifdef CONFIG_SCHEDSTATS
 	memset(&p->se.statistics, 0, sizeof(p->se.statistics));
@@ -1977,6 +2029,149 @@ asmlinkage void schedule_tail(struct task_struct *prev)
 		put_user(task_pid_vnr(current), current->set_child_tid);
 }
 
+#include <linux/huawei/rdr_private.h>
+#ifdef CONFIG_HISI_RDR
+#define MAX_TASK_SWITCH_RTN 3 /* max task switch callout routines */
+static rdr_funcptr_2 task_switch_ls[MAX_TASK_SWITCH_RTN] = { NULL };
+
+/**
+ * param1:hook:routine to be added to table
+ * param2:table:table which to add
+ * param3:max_entries:max entries in table
+*/
+int hook_add_to_tail(void *hook, void *table[], int max_entries)
+{
+	int ix;
+
+	if (table == NULL)
+		return -1;
+
+	preempt_disable(); /* disable task switching */
+
+	/* find a slot after last hook in table */
+	for (ix = 0; ix < max_entries; ++ix) {
+		if (table[ix] == NULL) {
+			table[ix] = hook;
+			preempt_enable(); /* re-enable task switching */
+			return 0;
+		}
+	}
+
+	/* no free slot found */
+	preempt_enable(); /* re-enable task switching */
+
+	return -1;
+}
+
+int task_switch_hook_add(rdr_funcptr_2 switch_hook)
+{
+	/* translate hookLib errno's to taskLib errno's */
+	return hook_add_to_tail(switch_hook, (void **)task_switch_ls,
+			MAX_TASK_SWITCH_RTN);
+}
+EXPORT_SYMBOL(task_switch_hook_add);
+
+int task_switch_hook_del(rdr_funcptr_2 switch_hook)
+{
+	int ix;
+
+	preempt_disable();/* disable task switching */
+
+	/* find a slot after last hook in table */
+	for (ix = 0; ix < MAX_TASK_SWITCH_RTN; ++ix) {
+		if (task_switch_ls[ix] == switch_hook) {
+			task_switch_ls[ix] = NULL;
+			preempt_enable(); /* re-enable task switching */
+			return 0;
+		}
+	}
+
+	/* no free slot found */
+	preempt_enable(); /* re-enable task switching */
+
+	return -1;
+}
+EXPORT_SYMBOL(task_switch_hook_del);
+#else
+#define MAX_TASK_SWITCH_RTN 3 /* max task switch callout routines */
+static rdr_funcptr_2 task_switch_ls[MAX_TASK_SWITCH_RTN] = { NULL };
+
+/**
+ * param1:hook:routine to be added to table
+ * param2:table:table which to add
+ * param3:max_entries:max entries in table
+*/
+int hook_add_to_tail(void *hook, void *table[], int max_entries)
+{
+       int ix;
+
+       if (table == NULL)
+               return -1;
+
+       preempt_disable(); /* disable task switching */
+
+       /* find a slot after last hook in table */
+       for (ix = 0; ix < max_entries; ++ix) {
+               if (table[ix] == NULL) {
+                       table[ix] = hook;
+                       preempt_enable(); /* re-enable task switching */
+                       return 0;
+               }
+       }
+
+       /* no free slot found */
+       preempt_enable(); /* re-enable task switching */
+
+       return -1;
+}
+
+int task_switch_hook_add(rdr_funcptr_2 switch_hook)
+{
+       /* translate hookLib errno's to taskLib errno's */
+       return hook_add_to_tail(switch_hook, (void **)task_switch_ls,
+                       MAX_TASK_SWITCH_RTN);
+}
+EXPORT_SYMBOL(task_switch_hook_add);
+
+int task_switch_hook_del(rdr_funcptr_2 switch_hook)
+{
+       int ix;
+
+       preempt_disable();/* disable task switching */
+
+       /* find a slot after last hook in table */
+       for (ix = 0; ix < MAX_TASK_SWITCH_RTN; ++ix) {
+               if (task_switch_ls[ix] == switch_hook) {
+                       task_switch_ls[ix] = NULL;
+                       preempt_enable(); /* re-enable task switching */
+                       return 0;
+               }
+       }
+
+       /* no free slot found */
+       preempt_enable(); /* re-enable task switching */
+
+       return -1;
+}
+EXPORT_SYMBOL(task_switch_hook_del);
+
+#if 0
+int hook_add_to_tail(void *hook, void *table[], int max_entries)
+{
+	return -1;
+}
+
+int task_switch_hook_add(rdr_funcptr_2 switch_hook)
+{
+	return -1;
+}
+
+int task_switch_hook_del(rdr_funcptr_2 switch_hook)
+{
+	return -1;
+}
+#endif
+#endif
 /*
  * context_switch - switch to the new MM and the new
  * thread's register state.
@@ -2020,6 +2215,28 @@ context_switch(struct rq *rq, struct task_struct *prev,
 #endif
 
 	context_tracking_task_switch(prev, next);
+
+#ifdef CONFIG_HISI_RDR
+#ifdef CONFIG_HISI_RDR_SWITCH
+	/* do switch hooks */
+	{
+		int ix;
+		for (ix = 0; (ix < MAX_TASK_SWITCH_RTN)
+				&& (task_switch_ls[ix]); ++ix)
+			(*task_switch_ls[ix])((int)prev, (int)next);
+	}
+#endif
+#else
+//#ifndef CONFIG_ARCH_HI6XXX
+       /* do switch hooks */
+       {
+               int ix;
+               for (ix = 0; (ix < MAX_TASK_SWITCH_RTN)
+                               && (task_switch_ls[ix]); ++ix)
+                       (*task_switch_ls[ix])((void *)prev, (void *)next);
+       }
+//#endif
+#endif
 	/* Here we just switch the register state and the stack. */
 	switch_to(prev, next, prev);
 
@@ -2568,6 +2785,18 @@ static void __update_cpu_load(struct rq *this_rq, unsigned long this_load,
 	sched_avg_update(this_rq);
 }
 
+#ifdef CONFIG_SMP
+unsigned long get_rq_runnable_load(struct rq *rq)
+{
+       return rq->cfs.runnable_load_avg;
+}
+#else
+unsigned long get_rq_runnable_load(struct rq *rq)
+{
+       return rq->load.weight;
+}
+#endif
+
 #ifdef CONFIG_NO_HZ_COMMON
 /*
  * There is no sane way to deal with nohz on smp when using jiffies because the
@@ -2589,7 +2818,7 @@ static void __update_cpu_load(struct rq *this_rq, unsigned long this_load,
 void update_idle_cpu_load(struct rq *this_rq)
 {
 	unsigned long curr_jiffies = ACCESS_ONCE(jiffies);
-	unsigned long load = this_rq->load.weight;
+	unsigned long load = get_rq_runnable_load(this_rq);
 	unsigned long pending_updates;
 
 	/*
@@ -2635,11 +2864,12 @@ void update_cpu_load_nohz(void)
  */
 static void update_cpu_load_active(struct rq *this_rq)
 {
+	unsigned long load = get_rq_runnable_load(this_rq);
 	/*
 	 * See the mess around update_idle_cpu_load() / update_cpu_load_nohz().
 	 */
 	this_rq->last_load_update_tick = jiffies;
-	__update_cpu_load(this_rq, this_rq->load.weight, 1);
+	__update_cpu_load(this_rq, load, 1);
 
 	calc_load_account_active(this_rq);
 }
@@ -3018,6 +3248,10 @@ need_resched:
 		rq->nr_switches++;
 		rq->curr = next;
 		++*switch_count;
+
+#ifdef CONFIG_HUAWEI_MSG_POLICY
+		update_msg_stat(cpu, prev, next);
+#endif
 
 		context_switch(rq, prev, next); /* unlocks the rq */
 		/*
@@ -3825,6 +4059,8 @@ static struct task_struct *find_process_by_pid(pid_t pid)
 	return pid ? find_task_by_vpid(pid) : current;
 }
 
+extern struct cpumask hmp_slow_cpu_mask;
+
 /* Actually do priority change: must hold rq lock. */
 static void
 __setscheduler(struct rq *rq, struct task_struct *p, int policy, int prio)
@@ -3834,8 +4070,17 @@ __setscheduler(struct rq *rq, struct task_struct *p, int policy, int prio)
 	p->normal_prio = normal_prio(p);
 	/* we are holding p->pi_lock already */
 	p->prio = rt_mutex_getprio(p);
-	if (rt_prio(p->prio))
+	if (rt_prio(p->prio)) {
 		p->sched_class = &rt_sched_class;
+#ifdef CONFIG_SCHED_HMP
+		if (!cpumask_empty(&hmp_slow_cpu_mask))
+			if (cpumask_equal(&p->cpus_allowed, cpu_all_mask)) {
+				p->nr_cpus_allowed =
+					cpumask_weight(&hmp_slow_cpu_mask);
+				do_set_cpus_allowed(p, &hmp_slow_cpu_mask);
+			}
+#endif
+	}
 	else
 		p->sched_class = &fair_sched_class;
 	set_load_weight(p);
@@ -4679,6 +4924,9 @@ void sched_show_task(struct task_struct *p)
 		(unsigned long)task_thread_info(p)->flags);
 
 	print_worker_info(KERN_INFO, p);
+#ifdef CONFIG_ILOCKDEP
+	show_ilockdep_info(p);
+#endif
 	show_stack(p, NULL);
 }
 
@@ -4759,6 +5007,9 @@ void __cpuinit init_idle(struct task_struct *idle, int cpu)
 	rq->curr = rq->idle = idle;
 #if defined(CONFIG_SMP)
 	idle->on_cpu = 1;
+#endif
+#ifdef CONFIG_ILOCKDEP
+	ilockdep_init(&idle->ilockdep_lock);
 #endif
 	raw_spin_unlock_irqrestore(&rq->lock, flags);
 
@@ -7104,13 +7355,24 @@ static inline int preempt_count_equals(int preempt_offset)
 	return (nested == preempt_offset);
 }
 
+static int __might_sleep_init_called;
+int __init __might_sleep_init(void)
+{
+	__might_sleep_init_called = 1;
+	return 0;
+}
+early_initcall(__might_sleep_init);
+
 void __might_sleep(const char *file, int line, int preempt_offset)
 {
 	static unsigned long prev_jiffy;	/* ratelimiting */
 
 	rcu_sleep_check(); /* WARN_ON_ONCE() by default, no rate limit reqd. */
 	if ((preempt_count_equals(preempt_offset) && !irqs_disabled()) ||
-	    system_state != SYSTEM_RUNNING || oops_in_progress)
+	    oops_in_progress)
+		return;
+	if (system_state != SYSTEM_RUNNING &&
+	    (!__might_sleep_init_called || system_state != SYSTEM_BOOTING))
 		return;
 	if (time_before(jiffies, prev_jiffy + HZ) && prev_jiffy)
 		return;
@@ -8082,6 +8344,7 @@ struct cgroup_subsys cpu_cgroup_subsys = {
 	.css_offline	= cpu_cgroup_css_offline,
 	.can_attach	= cpu_cgroup_can_attach,
 	.attach		= cpu_cgroup_attach,
+	.allow_attach	= subsys_cgroup_allow_attach,
 	.exit		= cpu_cgroup_exit,
 	.subsys_id	= cpu_cgroup_subsys_id,
 	.base_cftypes	= cpu_files,

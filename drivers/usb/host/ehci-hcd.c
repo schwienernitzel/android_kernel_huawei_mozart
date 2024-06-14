@@ -591,11 +591,16 @@ static int ehci_run (struct usb_hcd *hcd)
 	 */
 	hcc_params = ehci_readl(ehci, &ehci->caps->hcc_params);
 	if (HCC_64BIT_ADDR(hcc_params)) {
-		ehci_writel(ehci, 0, &ehci->regs->segment);
-#if 0
-// this is deeply broken on almost all architectures
+#ifdef CONFIG_ARM64
+		ehci_writel(ehci, ehci->periodic_dma >> 32, &ehci->regs->segment);
+		/*
+		 * this is deeply broken on almost all architectures
+		 * but arm64 can use it so enable it
+		 */
 		if (!dma_set_mask(hcd->self.controller, DMA_BIT_MASK(64)))
 			ehci_info(ehci, "enabled 64bit DMA\n");
+#else
+		ehci_writel(ehci, 0, &ehci->regs->segment);
 #endif
 	}
 
@@ -1226,6 +1231,11 @@ MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_AUTHOR (DRIVER_AUTHOR);
 MODULE_LICENSE ("GPL");
 
+#if 0 /*#ifdef CONFIG_USB_EHCI_K3V3 */
+#include "ehci-k3v3.c"
+#define	PLATFORM_DRIVER		ehci_k3v3_driver
+#endif
+
 #ifdef CONFIG_USB_EHCI_FSL
 #include "ehci-fsl.c"
 #define	PLATFORM_DRIVER		ehci_fsl_driver
@@ -1319,6 +1329,7 @@ static int __init ehci_hcd_init(void)
 #endif
 
 #ifdef PLATFORM_DRIVER
+	ehci_init_driver(&hisik3_ehci_hc_driver, &hisi_overrides);
 	retval = platform_driver_register(&PLATFORM_DRIVER);
 	if (retval < 0)
 		goto clean0;

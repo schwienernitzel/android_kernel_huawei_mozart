@@ -42,6 +42,10 @@
 #include <linux/gfp.h>
 #include <linux/module.h>
 
+#ifdef CONFIG_HW_WIFIPRO
+#include "wifipro_tcp_monitor.h"
+#endif
+
 /* People can turn this off for buggy TCP's found in printers etc. */
 int sysctl_tcp_retrans_collapse __read_mostly = 1;
 
@@ -231,14 +235,13 @@ void tcp_select_initial_window(int __space, __u32 mss,
 	}
 
 	/* Set initial window to a value enough for senders starting with
-	 * initial congestion window of TCP_DEFAULT_INIT_RCVWND. Place
+	 * initial congestion window of sysctl_tcp_default_init_rwnd. Place
 	 * a limit on the initial window when mss is larger than 1460.
 	 */
 	if (mss > (1 << *rcv_wscale)) {
-		int init_cwnd = TCP_DEFAULT_INIT_RCVWND;
+		int init_cwnd = sysctl_tcp_default_init_rwnd;
 		if (mss > 1460)
-			init_cwnd =
-			max_t(u32, (1460 * TCP_DEFAULT_INIT_RCVWND) / mss, 2);
+			init_cwnd = max_t(u32, (1460 * init_cwnd) / mss, 2);
 		/* when initializing use the value from init_rcv_wnd
 		 * rather than the default from above
 		 */
@@ -957,6 +960,12 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it,
 	if (after(tcb->end_seq, tp->snd_nxt) || tcb->seq == tcb->end_seq)
 		TCP_ADD_STATS(sock_net(sk), TCP_MIB_OUTSEGS,
 			      tcp_skb_pcount(skb));
+
+#ifdef CONFIG_HW_WIFIPRO
+    if (after(tcb->end_seq, tp->snd_nxt) || tcb->seq == tcb->end_seq){
+        wifipro_update_tcp_statistics(sk, WIFIPRO_TCP_MIB_OUTSEGS, tcp_skb_pcount(skb));
+    }
+#endif
 
 	err = icsk->icsk_af_ops->queue_xmit(skb, &inet->cork.fl);
 	if (likely(err <= 0))
@@ -1844,6 +1853,12 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 	while ((skb = tcp_send_head(sk))) {
 		unsigned int limit;
 
+#ifdef CONFIG_HUAWEI_BASTET
+		if (bastet_sock_send_prepare(sk)) {
+			break;
+		}
+#endif
+
 		tso_segs = tcp_init_tso_segs(sk, skb, mss_now);
 		BUG_ON(!tso_segs);
 
@@ -2571,65 +2586,39 @@ begin_fwd:
 	}
 }
 
-/* We allow to exceed memory limits for FIN packets to expedite
- * connection tear down and (memory) recovery.
- * Otherwise tcp_send_fin() could be tempted to either delay FIN
- * or even be forced to close flow without any FIN.
- */
-static void sk_forced_wmem_schedule(struct sock *sk, int size)
-{
-	int amt, status;
-
-	if (size <= sk->sk_forward_alloc)
-		return;
-	amt = sk_mem_pages(size);
-	sk->sk_forward_alloc += amt * SK_MEM_QUANTUM;
-	sk_memory_allocated_add(sk, amt, &status);
-}
-
-/* Send a FIN. The caller locks the socket for us.
- * We should try to send a FIN packet really hard, but eventually give up.
+/* Send a fin.  The caller locks the socket for us.  This cannot be
+ * allowed to fail queueing a FIN frame under any circumstances.
  */
 void tcp_send_fin(struct sock *sk)
 {
-	struct sk_buff *skb, *tskb = tcp_write_queue_tail(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
+	struct sk_buff *skb = tcp_write_queue_tail(sk);
+	int mss_now;
 
-	/* Optimization, tack on the FIN if we have one skb in write queue and
-	 * this skb was not yet sent, or we are under memory pressure.
-	 * Note: in the latter case, FIN packet will be sent after a timeout,
-	 * as TCP stack thinks it has already been transmitted.
+	/* Optimization, tack on the FIN if we have a queue of
+	 * unsent frames.  But be careful about outgoing SACKS
+	 * and IP options.
 	 */
-	if (tskb && (tcp_send_head(sk) || sk_under_memory_pressure(sk))) {
-coalesce:
-		TCP_SKB_CB(tskb)->tcp_flags |= TCPHDR_FIN;
-		TCP_SKB_CB(tskb)->end_seq++;
+	mss_now = tcp_current_mss(sk);
+
+	if (tcp_send_head(sk) != NULL) {
+		TCP_SKB_CB(skb)->tcp_flags |= TCPHDR_FIN;
+		TCP_SKB_CB(skb)->end_seq++;
 		tp->write_seq++;
-		if (!tcp_send_head(sk)) {
-			/* This means tskb was already sent.
-			 * Pretend we included the FIN on previous transmit.
-			 * We need to set tp->snd_nxt to the value it would have
-			 * if FIN had been sent. This is because retransmit path
-			 * does not change tp->snd_nxt.
-			 */
-			tp->snd_nxt++;
-			return;
-		}
 	} else {
-		skb = alloc_skb_fclone(MAX_TCP_HEADER, sk->sk_allocation);
-		if (unlikely(!skb)) {
-			if (tskb)
-				goto coalesce;
-			return;
+		/* Socket is locked, keep trying until memory is available. */
+		for (;;) {
+			skb = sk_stream_alloc_skb(sk, 0, sk->sk_allocation);
+			if (skb)
+				break;
+			yield();
 		}
-		skb_reserve(skb, MAX_TCP_HEADER);
-		sk_forced_wmem_schedule(sk, skb->truesize);
 		/* FIN eats a sequence byte, write_seq advanced by tcp_queue_skb(). */
 		tcp_init_nondata_skb(skb, tp->write_seq,
 				     TCPHDR_ACK | TCPHDR_FIN);
 		tcp_queue_skb(sk, skb);
 	}
-	__tcp_push_pending_frames(sk, tcp_current_mss(sk), TCP_NAGLE_OFF);
+	__tcp_push_pending_frames(sk, mss_now, TCP_NAGLE_OFF);
 }
 
 /* We get here when a process closes a file descriptor (either due to
@@ -2790,6 +2779,10 @@ struct sk_buff *tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 	th->doff = (tcp_header_size >> 2);
 	TCP_ADD_STATS(sock_net(sk), TCP_MIB_OUTSEGS, tcp_skb_pcount(skb));
 
+#ifdef CONFIG_HW_WIFIPRO
+    wifipro_update_tcp_statistics(sk, WIFIPRO_TCP_MIB_OUTSEGS, tcp_skb_pcount(skb));
+#endif
+
 #ifdef CONFIG_TCP_MD5SIG
 	/* Okay, we have all we need - do the md5 hash if needed */
 	if (md5) {
@@ -2798,8 +2791,6 @@ struct sk_buff *tcp_make_synack(struct sock *sk, struct dst_entry *dst,
 	}
 #endif
 
-	/* Do not fool tcpdump (if any), clean our debris */
-	skb->tstamp.tv64 = 0;
 	return skb;
 }
 EXPORT_SYMBOL(tcp_make_synack);
@@ -2937,7 +2928,6 @@ static int tcp_send_syn_data(struct sock *sk, struct sk_buff *syn)
 		goto fallback;
 	syn_data->ip_summed = CHECKSUM_PARTIAL;
 	memcpy(syn_data->cb, syn->cb, sizeof(syn->cb));
-	skb_shinfo(syn_data)->gso_segs = 1;
 	if (unlikely(memcpy_fromiovecend(skb_put(syn_data, space),
 					 fo->data->msg_iov, 0, space))) {
 		kfree_skb(syn_data);

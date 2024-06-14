@@ -1851,11 +1851,11 @@ static struct rbd_obj_request *rbd_obj_request_create(const char *object_name,
 	rbd_assert(obj_request_type_valid(type));
 
 	size = strlen(object_name) + 1;
-	name = kmalloc(size, GFP_NOIO);
+	name = kmalloc(size, GFP_KERNEL);
 	if (!name)
 		return NULL;
 
-	obj_request = kmem_cache_zalloc(rbd_obj_request_cache, GFP_NOIO);
+	obj_request = kmem_cache_zalloc(rbd_obj_request_cache, GFP_KERNEL);
 	if (!obj_request) {
 		kfree(name);
 		return NULL;
@@ -2115,11 +2115,6 @@ static bool rbd_img_obj_end_request(struct rbd_obj_request *obj_request)
 			result, xferred);
 		if (!img_request->result)
 			img_request->result = result;
-		/*
-		 * Need to end I/O on the entire obj_request worth of
-		 * bytes in case of error.
-		 */
-		xferred = obj_request->length;
 	}
 
 	/* Image object requests don't own their page array */

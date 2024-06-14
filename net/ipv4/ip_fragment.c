@@ -824,20 +824,6 @@ static inline void ip4_frags_ctl_register(void)
 
 static int __net_init ipv4_frags_init_net(struct net *net)
 {
-	/* Fragment cache limits.
-	 *
-	 * The fragment memory accounting code, (tries to) account for
-	 * the real memory usage, by measuring both the size of frag
-	 * queue struct (inet_frag_queue (ipv4:ipq/ipv6:frag_queue))
-	 * and the SKB's truesize.
-	 *
-	 * A 64K fragment consumes 129736 bytes (44*2944)+200
-	 * (1500 truesize == 2944, sizeof(struct ipq) == 200)
-	 *
-	 * We will commit 4MB at one time. Should we cross that limit
-	 * we will prune down to 3MB, making room for approx 8 big 64K
-	 * fragments 8x128k.
-	 */
 	net->ipv4.frags.high_thresh = 4 * 1024 * 1024;
 	net->ipv4.frags.low_thresh  = 3 * 1024 * 1024;
 	/*

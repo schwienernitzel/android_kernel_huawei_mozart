@@ -161,7 +161,6 @@ UNUSUAL_DEV(  0x0419, 0xaaf6, 0x0100, 0x0100,
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_IGNORE_RESIDUE ),
 
-/* Reported by Pete Zaitcev <zaitcev@redhat.com>, bz#176584 */
 UNUSUAL_DEV(  0x0420, 0x0001, 0x0100, 0x0100,
 		"GENERIC", "MP3 PLAYER", /* MyMusix PD-205 on the outside. */
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
@@ -277,11 +276,7 @@ UNUSUAL_DEV(  0x0451, 0x5416, 0x0100, 0x0100,
 		USB_SC_DEVICE, USB_PR_BULK, NULL,
 		US_FL_NEED_OVERRIDE ),
 
-/*
- * Pete Zaitcev <zaitcev@yahoo.com>, from Patrick C. F. Ernzer, bz#162559.
- * The key does not actually break, but it returns zero sense which
- * makes our SCSI stack to print confusing messages.
- */
+
 UNUSUAL_DEV(  0x0457, 0x0150, 0x0100, 0x0100,
 		"USBest Technology",	/* sold by Transcend */
 		"USB Mass Storage Device",
@@ -759,13 +754,6 @@ UNUSUAL_DEV(  0x059f, 0x0643, 0x0000, 0x0000,
 		"DVD+-RW",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_GO_SLOW ),
-
-/* Reported by Christian Schaller <cschalle@redhat.com> */
-UNUSUAL_DEV(  0x059f, 0x0651, 0x0000, 0x0000,
-		"LaCie",
-		"External HDD",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_NO_WP_DETECT ),
 
 /* Submitted by Joel Bourquard <numlock@freesurf.ch>
  * Some versions of this device need the SubClass and Protocol overrides
@@ -1366,10 +1354,7 @@ UNUSUAL_DEV(  0x0d49, 0x7310, 0x0000, 0x9999,
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_SANE_SENSE),
 
-/*
- * Pete Zaitcev <zaitcev@yahoo.com>, bz#164688.
- * The device blatantly ignores LUN and returns 1 in GetMaxLUN.
- */
+
 UNUSUAL_DEV( 0x0c45, 0x1060, 0x0100, 0x0100,
 		"Unknown",
 		"Unknown",
@@ -2031,18 +2016,6 @@ UNUSUAL_DEV( 0x1908, 0x3335, 0x0200, 0x0200,
 		"Photo Frame",
 		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
 		US_FL_NO_READ_DISC_INFO ),
-
-/* Reported by Oliver Neukum <oneukum@suse.com>
- * This device morphes spontaneously into another device if the access
- * pattern of Windows isn't followed. Thus writable media would be dirty
- * if the initial instance is used. So the device is limited to its
- * virtual CD.
- * And yes, the concept that BCD goes up to 9 is not heeded */
-UNUSUAL_DEV( 0x19d2, 0x1225, 0x0000, 0xffff,
-		"ZTE,Incorporated",
-		"ZTE WCDMA Technologies MSM",
-		USB_SC_DEVICE, USB_PR_DEVICE, NULL,
-		US_FL_SINGLE_LUN ),
 
 /* Reported by Sven Geggus <sven-usbst@geggus.net>
  * This encrypted pen drive returns bogus data for the initial READ(10).

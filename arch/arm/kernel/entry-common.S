@@ -31,6 +31,14 @@
 ret_fast_syscall:
  UNWIND(.fnstart	)
  UNWIND(.cantunwind	)
+#ifdef CONFIG_HISI_RDR
+#ifndef CONFIG_HISI_RDR_SWITCH
+	stmdb   sp!, {r0-r12,lr}
+	mov r0, #0xff000000
+	bl rdr_syscall_hook
+	ldmia   sp!, {r0-r12,lr}
+#endif
+#endif
 	disable_irq				@ disable interrupts
 	ldr	r1, [tsk, #TI_FLAGS]		@ re-check for syscall tracing
 	tst	r1, #_TIF_SYSCALL_WORK
@@ -391,9 +399,7 @@ ENTRY(vector_swi)
 #else
  USER(	ldr	r10, [lr, #-4]		)	@ get SWI instruction
 #endif
-#ifdef CONFIG_CPU_ENDIAN_BE8
-	rev	r10, r10			@ little endian instruction
-#endif
+ ARM_BE8(rev	r10, r10)			@ little endian instruction
 
 #elif defined(CONFIG_AEABI)
 
@@ -431,6 +437,18 @@ ENTRY(vector_swi)
 local_restart:
 	ldr	r10, [tsk, #TI_FLAGS]		@ check for syscall tracing
 	stmdb	sp!, {r4, r5}			@ push fifth and sixth args
+#ifdef CONFIG_HISI_RDR
+#ifndef CONFIG_HISI_RDR_SWITCH
+	stmdb   sp!, {r0-r12,lr}
+	mrs r0, cpsr
+	stmdb   sp!, {r0}
+	mov r0, scno
+	bl rdr_syscall_hook
+	ldmia   sp!, {r0}
+	msr cpsr, r0
+	ldmia   sp!, {r0-r12,lr}
+#endif
+#endif
 
 	tst	r10, #_TIF_SYSCALL_WORK		@ are we tracing syscalls?
 	bne	__sys_trace

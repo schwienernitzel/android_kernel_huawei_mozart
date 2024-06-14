@@ -189,9 +189,11 @@ int update_devfreq(struct devfreq *devfreq)
 		return err;
 
 	if (devfreq->profile->freq_table)
-		if (devfreq_update_status(devfreq, freq))
+		if ((err = devfreq_update_status(devfreq, freq))) {
 			dev_err(&devfreq->dev,
 				"Couldn't update frequency transition information.\n");
+			return err;
+		}
 
 	devfreq->previous_freq = freq;
 	return err;
@@ -472,7 +474,7 @@ struct devfreq *devfreq_add_device(struct device *dev,
 						devfreq->profile->max_state *
 						devfreq->profile->max_state,
 						GFP_KERNEL);
-	devfreq->time_in_state = devm_kzalloc(dev, sizeof(unsigned int) *
+	devfreq->time_in_state = devm_kzalloc(dev, sizeof(unsigned long) *
 						devfreq->profile->max_state,
 						GFP_KERNEL);
 	devfreq->last_stat_updated = jiffies;

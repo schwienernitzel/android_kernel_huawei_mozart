@@ -20,7 +20,13 @@
 #include <linux/sched.h>
 #include <linux/math64.h>
 #include <linux/module.h>
-
+#ifdef CONFIG_HISILICON_PLATFORM_MAINTAIN
+#ifdef CONFIG_ARCH_HI6XXX
+#include <linux/hisi/pm/pwrctrl_multi_memcfg.h>
+#include <linux/hisi/reset.h>
+#endif
+#endif
+#define PREDICT_THRESHOLD   5000000 //in us
 #define BUCKETS 12
 #define INTERVALS 8
 #define RESOLUTION 1024
@@ -115,6 +121,7 @@ struct menu_device {
 
 	unsigned int	expected_us;
 	u64		predicted_us;
+	ktime_t		state_ok_until;
 	unsigned int	exit_us;
 	unsigned int	bucket;
 	u64		correction_factor[BUCKETS];
@@ -126,6 +133,7 @@ struct menu_device {
 #define LOAD_INT(x) ((x) >> FSHIFT)
 #define LOAD_FRAC(x) LOAD_INT(((x) & (FIXED_1-1)) * 100)
 
+#if 0
 static int get_loadavg(void)
 {
 	unsigned long this = this_cpu_load();
@@ -133,6 +141,7 @@ static int get_loadavg(void)
 
 	return LOAD_INT(this) * 10 + LOAD_FRAC(this) / 10;
 }
+#endif
 
 static inline int which_bucket(unsigned int duration)
 {
@@ -173,7 +182,12 @@ static inline int performance_multiplier(void)
 
 	/* for higher loadavg, we are more reluctant */
 
-	mult += 2 * get_loadavg();
+	/*
+	 * this doesn't work as intended - it is almost always 0, but can
+	 * sometimes, depending on workload, spike very high into the hundreds
+	 * even when the average cpu load is under 10%.
+	 */
+	/* mult += 2 * get_loadavg(); */
 
 	/* for IO wait tasks (per cpu!) we add 5x each */
 	mult += 10 * nr_iowait_cpu(smp_processor_id());
@@ -182,6 +196,12 @@ static inline int performance_multiplier(void)
 }
 
 static DEFINE_PER_CPU(struct menu_device, menu_devices);
+
+ktime_t menu_state_ok_until(int cpuid)
+{
+	return per_cpu(menu_devices, cpuid).state_ok_until;
+}
+EXPORT_SYMBOL(menu_state_ok_until);
 
 static void menu_update(struct cpuidle_driver *drv, struct cpuidle_device *dev);
 
@@ -251,6 +271,7 @@ again:
 	}
 }
 
+
 /**
  * menu_select - selects the next idle state to enter
  * @drv: cpuidle driver containing state data
@@ -263,18 +284,23 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 	int i;
 	int multiplier;
 	struct timespec t;
+	ktime_t now;
 
 	if (data->needs_update) {
 		menu_update(drv, dev);
 		data->needs_update = 0;
 	}
 
-	data->last_state_idx = CPUIDLE_DRIVER_STATE_START - 1;
+	data->last_state_idx = 0;
 	data->exit_us = 0;
+
 
 	/* Special case when user has set very strict latency requirement */
 	if (unlikely(latency_req == 0))
 		return 0;
+
+	/* Record the time state selection was started */
+	now = ktime_get();
 
 	/* determine the expected residency time, round up */
 	t = ktime_to_timespec(tick_nohz_get_sleep_length());
@@ -309,6 +335,14 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 		data->last_state_idx = CPUIDLE_DRIVER_STATE_START;
 
 	/*
+	 * We disable the predict when the next timer is too long,
+	 * so that it'll not stay in a light C state for a long time after
+	 * a wrong predict.
+	 */
+	if (data->expected_us > PREDICT_THRESHOLD)
+		data->predicted_us = data->expected_us;
+
+	/*
 	 * Find the idle state with the lowest power while satisfying
 	 * our constraints.
 	 */
@@ -327,8 +361,17 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 
 		data->last_state_idx = i;
 		data->exit_us = s->exit_latency;
+		data->state_ok_until = ktime_add_ns(now, NSEC_PER_USEC *
+			(data->predicted_us - s->target_residency));
 	}
-
+#ifdef CONFIG_HISILICON_PLATFORM_MAINTAIN
+#ifdef CONFIG_ARCH_HI6XXX
+    if(is_mcu_exception()) {
+        return 0;
+    }
+    set_acore_state(dev->cpu, data->last_state_idx);
+#endif
+#endif
 	return data->last_state_idx;
 }
 
@@ -344,6 +387,11 @@ static void menu_reflect(struct cpuidle_device *dev, int index)
 {
 	struct menu_device *data = &__get_cpu_var(menu_devices);
 	data->last_state_idx = index;
+#ifdef CONFIG_HISILICON_PLATFORM_MAINTAIN
+#ifdef CONFIG_ARCH_HI6XXX
+    clear_acore_state(dev->cpu);
+#endif
+#endif
 	if (index >= 0)
 		data->needs_update = 1;
 }
