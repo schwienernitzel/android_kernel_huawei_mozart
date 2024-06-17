@@ -11,6 +11,7 @@
 #include <linux/vmalloc.h>
 #include <linux/zlib.h>
 #include <linux/mutex.h>
+#include <linux/errno.h>
 
 #define COMPR_LEVEL 3
 
