@@ -360,7 +360,7 @@ USERINCLUDE    := \
 
 # Use LINUXINCLUDE when you must reference the include/ directory.
 # Needed to be compatible with the O= option
-COMMON_HEAD := $(CURDIR)/../kernel/drivers/
+COMMON_HEAD := $(KBUILD_SRC)/drivers/
 ifneq ($(COMMON_HEAD),)
 BALONG_INC := $(patsubst %,-I%,$(COMMON_HEAD))
 endif
@@ -424,7 +424,7 @@ KBUILD_CPPFLAGS += -DDRV_BUILD_SEPARATE
 endif
 OBB_PRODUCT_NAME = hi3635_udp
 ifneq ($(findstring hi3635, $(OBB_PRODUCT_NAME) ),)
-BALONG_TOPDIR = $(CURDIR)/../kernel/drivers/vendor/hisi
+BALONG_TOPDIR = $(KBUILD_SRC)/drivers/vendor/hisi
 OBB_PRODUCT_NAME = hi3635_udp
 CFG_PLATFORM = hi3630
 TARGET_ARM_TYPE = arm64
